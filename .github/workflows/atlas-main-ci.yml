@@ -12,12 +12,14 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig.json'
+      - 'tsconfig.frontend.json'
       - 'state/**'
       - 'docs/agents/**'
       - 'docs/FORGE_PARITY_MODE.md'
       - '.opencode/agents/**'
       - '.github/scripts/**'
       - '.github/workflows/**'
+      - 'forge-local/**'
 
 permissions:
   contents: read
@@ -39,7 +41,7 @@ jobs:
   host_product_gates:
     name: HOST PRODUCT GATES
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -50,10 +52,12 @@ jobs:
         run: npm ci
       - name: Unit and integration tests
         run: npm test
-      - name: Typecheck
+      - name: Backend and UI Kit typecheck
         run: npm run typecheck
       - name: Static gates
         run: npm run lint
+      - name: High and critical dependency advisory gate
+        run: npm run audit:high
       - name: Build gate
         run: npm run build
 
@@ -66,3 +70,34 @@ jobs:
       - uses: actions/checkout@v6
       - name: Run isolated Node 24 / 512MB Forge parity gate
         run: bash .github/scripts/forge-parity-check.sh
+
+  authenticated_forge_lint:
+    name: AUTHENTICATED FORGE LINT WHEN AVAILABLE
+    needs: [host_product_gates]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      FORGE_EMAIL: ${{ secrets.FORGE_EMAIL }}
+      FORGE_API_TOKEN: ${{ secrets.FORGE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Run real Forge lint on a registered app when credentials exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$FORGE_EMAIL" || -z "$FORGE_API_TOKEN" ]]; then
+            echo 'FORGE_AUTHENTICATED_LINT=SKIPPED_MISSING_CREDENTIALS'
+            exit 0
+          fi
+          if ! grep -Eq '^[[:space:]]+id:[[:space:]]*ari:cloud:ecosystem::app/' manifest.yml || grep -Eq 'ari:cloud:ecosystem::app/0{8}-0{4}-0{4}-0{4}-0{12}|ATLAS_PLACEHOLDER' manifest.yml; then
+            echo 'FORGE_AUTHENTICATED_LINT=SKIPPED_UNREGISTERED_APP; live gate owns register + lint'
+            exit 0
+          fi
+          npm install -g @forge/cli@latest
+          forge settings set usage-analytics false || true
+          forge whoami
+          forge lint
+          echo 'FORGE_AUTHENTICATED_LINT=PASS'
