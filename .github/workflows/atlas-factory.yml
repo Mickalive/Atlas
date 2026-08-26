@@ -27,17 +27,25 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
-        with: { fetch-depth: 0 }
-      - run: git switch -C "factory/${GITHUB_RUN_ID}/api"
+        with:
+          fetch-depth: 0
+      - name: Prepare API lane
+        run: git switch -C "factory/${GITHUB_RUN_ID}/api"
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
-      - name: Research current Atlassian API feasibility
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent api_architect "Produce the binding API feasibility map for the current Atlas V1. Verify current official Atlassian docs on the network; do not rely on stale memory. Respect docs/FORGE_PARITY_MODE.md and the canonical Atlas control plane."
-      - name: Persist lane
+      - name: Research API feasibility
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent api_architect \
+            "Produce the binding API feasibility map for the current Atlas V1. Verify current official Atlassian docs on the network; do not rely on stale memory. Respect docs/FORGE_PARITY_MODE.md and the canonical Atlas control plane."
+      - name: Persist API lane
         run: |
           git config user.name atlas-api-architect
           git config user.email atlas-api-architect@autonomous.local
-          git add -A && git commit -m "API feasibility ${GITHUB_RUN_ID}" || true
+          git add -A
+          git commit -m "API feasibility ${GITHUB_RUN_ID}" || true
           git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/api"
 
   product_architect:
@@ -46,17 +54,25 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
-        with: { fetch-depth: 0 }
-      - run: git switch -C "factory/${GITHUB_RUN_ID}/product"
+        with:
+          fetch-depth: 0
+      - name: Prepare Product lane
+        run: git switch -C "factory/${GITHUB_RUN_ID}/product"
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Freeze sellable V1
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent market_product_architect "Research the current Atlassian Marketplace and freeze the narrowest sellable V1. Recoup and current license optimizers are real competitors. Fixture/demo mode must be visibly non-live and cannot alter actual product logic."
-      - name: Persist lane
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent market_product_architect \
+            "Research the current Atlassian Marketplace and freeze the narrowest sellable V1. Recoup and current license optimizers are real competitors. Fixture/demo mode must be visibly non-live and cannot alter actual product logic."
+      - name: Persist Product lane
         run: |
           git config user.name atlas-product-architect
           git config user.email atlas-product-architect@autonomous.local
-          git add -A && git commit -m "Product V1 ${GITHUB_RUN_ID}" || true
+          git add -A
+          git commit -m "Product V1 ${GITHUB_RUN_ID}" || true
           git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/product"
 
   security_architect:
@@ -65,17 +81,25 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
-        with: { fetch-depth: 0 }
-      - run: git switch -C "factory/${GITHUB_RUN_ID}/security"
+        with:
+          fetch-depth: 0
+      - name: Prepare Security lane
+        run: git switch -C "factory/${GITHUB_RUN_ID}/security"
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
-      - name: Design adversarial safety gates
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent security_test_architect "Define the least-privilege security model and false-positive test matrix for a real Marketplace release. Treat fixture/live separation, tenant isolation, partial scans and Forge parity constraints as release-critical."
-      - name: Persist lane
+      - name: Design safety gates
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent security_test_architect \
+            "Define the least-privilege security model and false-positive test matrix for a real Marketplace release. Treat fixture/live separation, tenant isolation, partial scans and Forge parity constraints as release-critical."
+      - name: Persist Security lane
         run: |
           git config user.name atlas-security-architect
           git config user.email atlas-security-architect@autonomous.local
-          git add -A && git commit -m "Security test plan ${GITHUB_RUN_ID}" || true
+          git add -A
+          git commit -m "Security test plan ${GITHUB_RUN_ID}" || true
           git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/security"
 
   builder:
@@ -85,11 +109,13 @@ jobs:
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v6
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.ATLAS_NODE_VERSION }}
-      - name: Mount research lanes
+      - name: Mount architecture lanes
+        shell: bash
         run: |
           for lane in api product security; do
             git fetch origin "factory/${GITHUB_RUN_ID}/$lane:refs/remotes/origin/factory/${GITHUB_RUN_ID}/$lane"
@@ -99,15 +125,20 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Build real Forge V1
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent implementation_builder "Build the actual Atlas V1 now. API=/tmp/atlas_api/docs/API_FEASIBILITY.md Product=/tmp/atlas_product/docs/PRODUCT_V1.md Security=/tmp/atlas_security/docs/SECURITY_TEST_PLAN.md. Resolve contradictions conservatively: verified API feasibility controls platform facts, stricter security controls safety, product spec controls UX only where technically/safely feasible. Build Forge-compatible production code plus a swappable fixture gateway; do not stop at a plan."
-      - name: Require an actual product delivery
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent implementation_builder \
+            "Build the actual Atlas V1 now. API=/tmp/atlas_api/docs/API_FEASIBILITY.md Product=/tmp/atlas_product/docs/PRODUCT_V1.md Security=/tmp/atlas_security/docs/SECURITY_TEST_PLAN.md. Resolve contradictions conservatively. Verified API feasibility controls platform facts; stricter security controls safety; product spec controls UX only where technically and safely feasible. Build Forge-compatible production code plus a swappable fixture gateway. Do not stop at a plan."
+      - name: Require actual product artifacts
         shell: bash
         run: |
           if [[ ! -f manifest.yml || ! -f package.json ]]; then
-            echo '::error::ATLAS_BUILD_ARTIFACT_MISSING: Builder returned without manifest.yml and package.json.'
+            echo '::error::ATLAS_BUILD_ARTIFACT_MISSING Builder returned without manifest.yml and package.json.'
             exit 70
           fi
-      - name: Run host tests
+      - name: Run host diagnostics
         continue-on-error: true
         shell: bash
         run: |
@@ -116,16 +147,18 @@ jobs:
           npm run typecheck --if-present
           npm run lint --if-present
           npm run build --if-present
-      - name: Forge parity container diagnostic
+      - name: Run Forge parity diagnostic
         continue-on-error: true
         shell: bash
         run: bash .github/scripts/forge-parity-check.sh
-      - name: Persist build for independent attack
+      - name: Persist build snapshot
         if: always()
+        shell: bash
         run: |
           git config user.name atlas-builder
           git config user.email atlas-builder@autonomous.local
-          git add -A && git commit -m "Atlas V1 build ${GITHUB_RUN_ID}" || true
+          git add -A
+          git commit -m "Atlas V1 build ${GITHUB_RUN_ID}" || true
           git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/build"
 
   functional_redteam:
@@ -136,8 +169,10 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
       - name: Checkout build snapshot
+        shell: bash
         run: |
           git fetch origin "factory/${GITHUB_RUN_ID}/build:refs/remotes/origin/factory/${GITHUB_RUN_ID}/build"
           git switch -C "factory/${GITHUB_RUN_ID}/functional-audit" "origin/factory/${GITHUB_RUN_ID}/build"
@@ -145,8 +180,14 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Attack correctness
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent functional_redteam "Audit this exact builder snapshot. Attack fixture/live equivalence, false savings, partial scans, pricing math and all SAFE classifications. Your only durable output is audit/FUNCTIONAL.md; do not repair the app."
-      - name: Persist audit
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent functional_redteam \
+            "Audit this exact builder snapshot. Attack fixture/live equivalence, false savings, partial scans, pricing math and all SAFE classifications. Your only durable output is audit/FUNCTIONAL.md. Do not repair the app."
+      - name: Persist functional audit
+        shell: bash
         run: |
           git reset -- . >/dev/null 2>&1 || true
           git add audit/FUNCTIONAL.md
@@ -163,8 +204,10 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v6
-        with: { fetch-depth: 0 }
-      - name: Checkout build and mount security plan
+        with:
+          fetch-depth: 0
+      - name: Checkout build and security plan
+        shell: bash
         run: |
           git fetch origin "factory/${GITHUB_RUN_ID}/build:refs/remotes/origin/factory/${GITHUB_RUN_ID}/build"
           git switch -C "factory/${GITHUB_RUN_ID}/security-audit" "origin/factory/${GITHUB_RUN_ID}/build"
@@ -174,8 +217,14 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Attack security and Marketplace readiness
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent security_redteam "Audit this exact builder snapshot. Security plan=/tmp/atlas_security_plan/docs/SECURITY_TEST_PLAN.md. Attack scope creep, tenant leakage, mock/live confusion, secret handling and unsafe remediation. Durable output only audit/SECURITY.md; do not repair the app."
-      - name: Persist audit
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent security_redteam \
+            "Audit this exact builder snapshot. Security plan=/tmp/atlas_security_plan/docs/SECURITY_TEST_PLAN.md. Attack scope creep, tenant leakage, mock/live confusion, secret handling and unsafe remediation. Durable output only audit/SECURITY.md. Do not repair the app."
+      - name: Persist security audit
+        shell: bash
         run: |
           git reset -- . >/dev/null 2>&1 || true
           git add audit/SECURITY.md
@@ -192,11 +241,13 @@ jobs:
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v6
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.ATLAS_NODE_VERSION }}
       - name: Checkout build and mount audits
+        shell: bash
         run: |
           git fetch origin "factory/${GITHUB_RUN_ID}/build:refs/remotes/origin/factory/${GITHUB_RUN_ID}/build"
           git switch -C "factory/${GITHUB_RUN_ID}/candidate" "origin/factory/${GITHUB_RUN_ID}/build"
@@ -207,7 +258,12 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Repair and integrate
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent release_integrator "Repair the build using /tmp/atlas_functional-audit/audit/FUNCTIONAL.md and /tmp/atlas_security-audit/audit/SECURITY.md. Produce one release candidate, docs/RELEASE_STATUS.md and state/factory_direction.json. Do not stop until the parity gates pass or an explicit honest blocker remains."
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent release_integrator \
+            "Repair the build using /tmp/atlas_functional-audit/audit/FUNCTIONAL.md and /tmp/atlas_security-audit/audit/SECURITY.md. Produce one release candidate, docs/RELEASE_STATUS.md and state/factory_direction.json. Do not stop until the parity gates pass or an explicit honest blocker remains."
       - name: Validate continuation contract
         shell: bash
         run: |
@@ -230,12 +286,14 @@ jobs:
       - name: Hard Forge parity gate
         shell: bash
         run: bash .github/scripts/forge-parity-check.sh
-      - name: Persist candidate
+      - name: Persist release candidate
         if: always()
+        shell: bash
         run: |
           git config user.name atlas-release-integrator
           git config user.email atlas-release-integrator@autonomous.local
-          git add -A && git commit -m "Release candidate ${GITHUB_RUN_ID}" || true
+          git add -A
+          git commit -m "Release candidate ${GITHUB_RUN_ID}" || true
           git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/candidate"
 
   forge_release_gate:
@@ -253,11 +311,13 @@ jobs:
       ATLASSIAN_ORG_API_KEY: ${{ secrets.ATLASSIAN_ORG_API_KEY }}
     steps:
       - uses: actions/checkout@v6
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.ATLAS_NODE_VERSION }}
-      - name: Checkout candidate
+      - name: Checkout release candidate
+        shell: bash
         run: |
           git fetch origin "factory/${GITHUB_RUN_ID}/candidate:refs/remotes/origin/factory/${GITHUB_RUN_ID}/candidate"
           git switch -C release "origin/factory/${GITHUB_RUN_ID}/candidate"
@@ -309,13 +369,15 @@ jobs:
             "https://api.atlassian.com/admin/v1/orgs/$ATLASSIAN_ORG_ID/users")
           test "$code" = '200' || { echo "::error::Organizations API smoke failed HTTP $code"; cat /tmp/org-users.json; exit 1; }
           node -e "const x=require('/tmp/org-users.json'); if(!Array.isArray(x.data)) process.exit(1); console.log('ORG_API_USERS='+x.data.length)"
-      - name: Commit release state / Forge registration changes
+      - name: Commit release state and registration changes
+        shell: bash
         run: |
           git config user.name atlas-forge-release
           git config user.email atlas-forge-release@autonomous.local
           git add manifest.yml docs/RELEASE_STATUS.md state/factory_direction.json 2>/dev/null || true
           git commit -m "Forge gate ${GITHUB_RUN_ID}" || true
-      - name: Promote verified candidate to main
+      - name: Promote candidate to main
+        shell: bash
         run: |
           git fetch origin main
           git rebase origin/main
