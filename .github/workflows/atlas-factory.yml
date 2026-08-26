@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: atlas-product-factory
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 env:
   ATLAS_MODEL: opencode/x-preview-f-free
@@ -114,13 +114,17 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.ATLAS_NODE_VERSION }}
-      - name: Mount architecture lanes
+      - name: Mount and internalize architecture handoffs
         shell: bash
         run: |
+          mkdir -p .factory-inputs
           for lane in api product security; do
             git fetch origin "factory/${GITHUB_RUN_ID}/$lane:refs/remotes/origin/factory/${GITHUB_RUN_ID}/$lane"
             git worktree add --detach "/tmp/atlas_$lane" "origin/factory/${GITHUB_RUN_ID}/$lane"
           done
+          cp /tmp/atlas_api/docs/API_FEASIBILITY.md .factory-inputs/API_FEASIBILITY.md
+          cp /tmp/atlas_product/docs/PRODUCT_V1.md .factory-inputs/PRODUCT_V1.md
+          cp /tmp/atlas_security/docs/SECURITY_TEST_PLAN.md .factory-inputs/SECURITY_TEST_PLAN.md
           git switch -C "factory/${GITHUB_RUN_ID}/build"
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
@@ -130,7 +134,7 @@ jobs:
           .github/scripts/run-opencode-with-retry.sh run \
             --model "$ATLAS_MODEL" \
             --agent implementation_builder \
-            "Build the actual Atlas V1 now. API=/tmp/atlas_api/docs/API_FEASIBILITY.md Product=/tmp/atlas_product/docs/PRODUCT_V1.md Security=/tmp/atlas_security/docs/SECURITY_TEST_PLAN.md. Resolve contradictions conservatively. Verified API feasibility controls platform facts; stricter security controls safety; product spec controls UX only where technically and safely feasible. Build Forge-compatible production code plus a swappable fixture gateway. Do not stop at a plan."
+            "Build the actual Atlas V1 now. Read .factory-inputs/API_FEASIBILITY.md, .factory-inputs/PRODUCT_V1.md and .factory-inputs/SECURITY_TEST_PLAN.md. Resolve contradictions conservatively. Verified API feasibility controls platform facts; stricter security controls safety; product spec controls UX only where technically and safely feasible. Build Forge-compatible production code plus a swappable fixture gateway. Do not stop at a plan."
       - name: Require actual product artifacts
         shell: bash
         run: |
@@ -189,6 +193,7 @@ jobs:
       - name: Persist functional audit
         shell: bash
         run: |
+          test -f audit/FUNCTIONAL.md || { echo '::error::Missing audit/FUNCTIONAL.md'; exit 1; }
           git reset -- . >/dev/null 2>&1 || true
           git add audit/FUNCTIONAL.md
           git config user.name atlas-functional-redteam
@@ -206,14 +211,15 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Checkout build and security plan
+      - name: Checkout build and internalize security handoff
         shell: bash
         run: |
           git fetch origin "factory/${GITHUB_RUN_ID}/build:refs/remotes/origin/factory/${GITHUB_RUN_ID}/build"
           git switch -C "factory/${GITHUB_RUN_ID}/security-audit" "origin/factory/${GITHUB_RUN_ID}/build"
           git fetch origin "factory/${GITHUB_RUN_ID}/security:refs/remotes/origin/factory/${GITHUB_RUN_ID}/security"
           git worktree add --detach /tmp/atlas_security_plan "origin/factory/${GITHUB_RUN_ID}/security"
-          mkdir -p audit
+          mkdir -p .factory-inputs audit
+          cp /tmp/atlas_security_plan/docs/SECURITY_TEST_PLAN.md .factory-inputs/SECURITY_TEST_PLAN.md
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Attack security and Marketplace readiness
@@ -222,10 +228,11 @@ jobs:
           .github/scripts/run-opencode-with-retry.sh run \
             --model "$ATLAS_MODEL" \
             --agent security_redteam \
-            "Audit this exact builder snapshot. Security plan=/tmp/atlas_security_plan/docs/SECURITY_TEST_PLAN.md. Attack scope creep, tenant leakage, mock/live confusion, secret handling and unsafe remediation. Durable output only audit/SECURITY.md. Do not repair the app."
+            "Audit this exact builder snapshot. Read .factory-inputs/SECURITY_TEST_PLAN.md. Attack scope creep, tenant leakage, mock/live confusion, secret handling and unsafe remediation. Durable output only audit/SECURITY.md. Do not repair the app."
       - name: Persist security audit
         shell: bash
         run: |
+          test -f audit/SECURITY.md || { echo '::error::Missing audit/SECURITY.md'; exit 1; }
           git reset -- . >/dev/null 2>&1 || true
           git add audit/SECURITY.md
           git config user.name atlas-security-redteam
@@ -246,15 +253,18 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.ATLAS_NODE_VERSION }}
-      - name: Checkout build and mount audits
+      - name: Checkout build and internalize audits
         shell: bash
         run: |
           git fetch origin "factory/${GITHUB_RUN_ID}/build:refs/remotes/origin/factory/${GITHUB_RUN_ID}/build"
           git switch -C "factory/${GITHUB_RUN_ID}/candidate" "origin/factory/${GITHUB_RUN_ID}/build"
+          mkdir -p .factory-inputs/audits
           for lane in functional-audit security-audit; do
             git fetch origin "factory/${GITHUB_RUN_ID}/$lane:refs/remotes/origin/factory/${GITHUB_RUN_ID}/$lane"
             git worktree add --detach "/tmp/atlas_$lane" "origin/factory/${GITHUB_RUN_ID}/$lane"
           done
+          cp /tmp/atlas_functional-audit/audit/FUNCTIONAL.md .factory-inputs/audits/FUNCTIONAL.md
+          cp /tmp/atlas_security-audit/audit/SECURITY.md .factory-inputs/audits/SECURITY.md
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Repair and integrate
@@ -263,7 +273,7 @@ jobs:
           .github/scripts/run-opencode-with-retry.sh run \
             --model "$ATLAS_MODEL" \
             --agent release_integrator \
-            "Repair the build using /tmp/atlas_functional-audit/audit/FUNCTIONAL.md and /tmp/atlas_security-audit/audit/SECURITY.md. Produce one release candidate, docs/RELEASE_STATUS.md and state/factory_direction.json. Do not stop until the parity gates pass or an explicit honest blocker remains."
+            "Repair the build using .factory-inputs/audits/FUNCTIONAL.md and .factory-inputs/audits/SECURITY.md. Produce one release candidate, docs/RELEASE_STATUS.md and state/factory_direction.json. Do not stop until the parity gates pass or an explicit honest blocker remains."
       - name: Validate continuation contract
         shell: bash
         run: |
@@ -273,6 +283,8 @@ jobs:
           if [[ "$(jq -r '.continue' state/factory_direction.json)" == true ]]; then
             test -n "$(jq -r '.next_focus // empty' state/factory_direction.json)" || { echo '::error::continue=true requires next_focus'; exit 1; }
           fi
+      - name: Remove ephemeral factory inputs
+        run: rm -rf .factory-inputs
       - name: Hard host gate
         shell: bash
         run: |
