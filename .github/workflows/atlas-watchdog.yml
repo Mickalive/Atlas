@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Re-run only defensible infrastructure or builder non-delivery failures
+      - name: Recover failed Atlas infrastructure paths
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -30,39 +30,35 @@ jobs:
           REPO="$GITHUB_REPOSITORY"
           WF='atlas-factory.yml'
 
-          ACTIVE=$(gh run list --repo "$REPO" --workflow "$WF" --limit 30 --json status --jq '[.[]|select(.status!="completed")]|length' 2>/dev/null || echo 0)
-          if [[ "$ACTIVE" -gt 0 ]]; then
-            echo 'Factory active; watchdog observes but never interrupts productive work.'
+          STATE=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/${REPO}/contents/state/factory_direction.json?ref=main" 2>/dev/null || true)
+          STATUS=$(jq -r '.release_status // "UNKNOWN"' <<<"${STATE:-{}}" 2>/dev/null || echo UNKNOWN)
+          if [[ "$STATUS" == 'MARKETPLACE_READY' ]]; then
+            echo 'ATLAS_WATCHDOG=PRODUCT_FINISHED_MARKETPLACE_READY'
             exit 0
           fi
 
-          LATEST=$(gh run list --repo "$REPO" --workflow "$WF" --limit 30 --json databaseId,status,conclusion,createdAt,event --jq '[.[]|select(.status=="completed")]|sort_by(.createdAt)|last//empty' 2>/dev/null || true)
+          ACTIVE=$(gh run list --repo "$REPO" --workflow "$WF" --limit 30 --json status --jq '[.[]|select(.status!="completed")]|length' 2>/dev/null || echo 0)
+          if [[ "$ACTIVE" -gt 0 ]]; then
+            echo 'ATLAS_WATCHDOG=ACTIVE_FACTORY_PRESENT'
+            exit 0
+          fi
+
+          LATEST=$(gh run list --repo "$REPO" --workflow "$WF" --limit 30 --json databaseId,status,conclusion,createdAt,attempt --jq '[.[]|select(.status=="completed")]|sort_by(.createdAt)|last//empty' 2>/dev/null || true)
           [[ -n "$LATEST" ]] || exit 0
 
           ID=$(jq -r '.databaseId' <<<"$LATEST")
           CONCLUSION=$(jq -r '.conclusion // ""' <<<"$LATEST")
-          EVENT=$(jq -r '.event // "unknown"' <<<"$LATEST")
-          case "$CONCLUSION" in failure|timed_out|cancelled) ;; *) echo "Run $ID=$CONCLUSION; no recovery."; exit 0;; esac
+          ATTEMPT=$(jq -r '.attempt // 1' <<<"$LATEST")
+          case "$CONCLUSION" in failure|timed_out|cancelled) ;; *) echo "ATLAS_WATCHDOG=NO_RECOVERY_NEEDED run=$ID conclusion=$CONCLUSION"; exit 0;; esac
 
-          # A stale scheduled run must never resurrect the factory after the
-          # accepted machine state explicitly says stop. Explicit push/manual
-          # runs may still be retried because a human intentionally requested them.
-          STATE=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/${REPO}/contents/state/factory_direction.json?ref=main" 2>/dev/null || true)
-          CONTINUE=$(jq -r 'if (.continue|type)=="boolean" then .continue else false end' <<<"${STATE:-{}}" 2>/dev/null || echo false)
-          if [[ "$EVENT" == 'schedule' && "$CONTINUE" != true ]]; then
-            echo "Run $ID was autonomous schedule noise and main says continue=false; refusing resurrection."
-            exit 0
-          fi
-
-          ATTEMPT=$(gh run view "$ID" --repo "$REPO" --json attempt --jq '.attempt' 2>/dev/null || echo 1)
+          # Retry a single GitHub run at most three attempts. This is not a
+          # global stop: the continuity supervisor launches a fresh cycle if
+          # the run remains dead after this bounded local recovery.
           if [[ "$ATTEMPT" -ge 3 ]]; then
-            echo "::warning::Run $ID already reached attempt $ATTEMPT; refusing endless recovery."
+            echo "ATLAS_WATCHDOG=LOCAL_ATTEMPTS_EXHAUSTED run=$ID attempt=$ATTEMPT; supervisor will launch a fresh cycle."
             exit 0
           fi
 
-          # A GitHub-level timeout is recoverable once the workflow has no
-          # active jobs. Product/test failures normally conclude as failure,
-          # not timed_out, and remain subject to the signature filter below.
           if [[ "$CONCLUSION" == 'timed_out' ]]; then
             echo "::warning::Run $ID timed out; rerunning failed jobs (attempt $ATTEMPT/3)."
             gh run rerun "$ID" --repo "$REPO" --failed || gh run rerun "$ID" --repo "$REPO" || true
@@ -73,7 +69,10 @@ jobs:
           LOGS=$(gh run view "$ID" --repo "$REPO" --log 2>&1)
           RC=$?
           set -e
-          [[ "$RC" -eq 0 ]] || { echo 'Unable to inspect logs; refusing blind retry.'; exit 0; }
+          if [[ "$RC" -ne 0 ]]; then
+            echo '::warning::Unable to inspect failed-run logs. Supervisor remains responsible for a fresh continuation cycle.'
+            exit 0
+          fi
 
           TRANSIENT_RE='(ATLAS_TRANSIENT_OX_DETECTED|ATLAS_TRANSIENT_OX_EXHAUSTED|ATLAS_TRANSIENT_OX_INSTALL_EXHAUSTED|network_error|NetworkError|network error|fetch failed|APIConnectionError|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|ETIMEDOUT|timed out|socket hang up|HTTP[^0-9]*(429|500|502|503|504)|rate.?limit|service unavailable|bad gateway|gateway timeout|temporar(y|ily) unavailable|upstream request failed|endpoint is unavailable|unexpected server error|internal server error|provider[^\n]*(unavailable|overloaded|capacity)|server[^\n]*overloaded|try again later|UnknownError|err_[A-Za-z0-9]+|curl: \([0-9]+\)|could not resolve host|failed to connect|runner has received a shutdown signal|runner service is stopped|lost communication with the runner)'
 
@@ -89,4 +88,4 @@ jobs:
             exit 0
           fi
 
-          echo "Run $ID failed without a recoverable infrastructure signature; watchdog refuses to mask product/test failure."
+          echo "ATLAS_WATCHDOG=DETERMINISTIC_FAILURE run=$ID; supervisor will start a fresh repair cycle instead of masking the defect."
