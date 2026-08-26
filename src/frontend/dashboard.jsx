@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { render, Text, Button, Heading, Stack, SectionMessage, Textfield, DynamicTable } from '@forge/react';
+import ForgeReconciler, { Text, Button, Heading, Stack, SectionMessage, Textfield, DynamicTable } from '@forge/react';
 import { invoke } from '@forge/bridge';
 
 const usd = (n) => `$${Number(n ?? 0).toLocaleString('en-US')}`;
@@ -202,4 +202,4 @@ const Dashboard = () => {
   );
 };
 
-export const renderDashboard = render(<Dashboard />);
+ForgeReconciler.render(<Dashboard />);
