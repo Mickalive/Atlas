@@ -28,8 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
-      - name: Prepare lane
-        run: git switch -C "factory/${GITHUB_RUN_ID}/api"
+      - run: git switch -C "factory/${GITHUB_RUN_ID}/api"
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Research current Atlassian API feasibility
@@ -100,18 +99,23 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Build real Forge V1
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent implementation_builder "Build the actual Atlas V1 now. API=/tmp/atlas_api/docs/API_FEASIBILITY.md Product=/tmp/atlas_product/docs/PRODUCT_V1.md Security=/tmp/atlas_security/docs/SECURITY_TEST_PLAN.md. docs/FORGE_PARITY_MODE.md and the canonical control plane are binding. Build Forge-compatible production code plus a swappable fixture gateway; do not stop at a plan."
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent implementation_builder "Build the actual Atlas V1 now. API=/tmp/atlas_api/docs/API_FEASIBILITY.md Product=/tmp/atlas_product/docs/PRODUCT_V1.md Security=/tmp/atlas_security/docs/SECURITY_TEST_PLAN.md. Resolve contradictions conservatively: verified API feasibility controls platform facts, stricter security controls safety, product spec controls UX only where technically/safely feasible. Build Forge-compatible production code plus a swappable fixture gateway; do not stop at a plan."
+      - name: Require an actual product delivery
+        shell: bash
+        run: |
+          if [[ ! -f manifest.yml || ! -f package.json ]]; then
+            echo '::error::ATLAS_BUILD_ARTIFACT_MISSING: Builder returned without manifest.yml and package.json.'
+            exit 70
+          fi
       - name: Run host tests
         continue-on-error: true
         shell: bash
         run: |
-          if [[ -f package.json ]]; then
-            if [[ -f package-lock.json ]]; then npm ci; else npm install; fi
-            npm test --if-present
-            npm run typecheck --if-present
-            npm run lint --if-present
-            npm run build --if-present
-          fi
+          if [[ -f package-lock.json ]]; then npm ci; else npm install; fi
+          npm test --if-present
+          npm run typecheck --if-present
+          npm run lint --if-present
+          npm run build --if-present
       - name: Forge parity container diagnostic
         continue-on-error: true
         shell: bash
@@ -127,7 +131,7 @@ jobs:
   functional_redteam:
     name: FUNCTIONAL RED TEAM
     needs: [builder]
-    if: always() && needs.builder.result != 'cancelled'
+    if: needs.builder.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -154,7 +158,7 @@ jobs:
   security_redteam:
     name: SECURITY RED TEAM
     needs: [builder, security_architect]
-    if: always() && needs.builder.result != 'cancelled' && needs.security_architect.result == 'success'
+    if: needs.builder.result == 'success' && needs.security_architect.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -183,7 +187,7 @@ jobs:
   integrator:
     name: RELEASE INTEGRATOR
     needs: [functional_redteam, security_redteam]
-    if: always() && needs.functional_redteam.result == 'success' && needs.security_redteam.result == 'success'
+    if: needs.functional_redteam.result == 'success' && needs.security_redteam.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
