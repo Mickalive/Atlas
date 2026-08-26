@@ -2,6 +2,10 @@ name: Atlas Factory Continuity Supervisor
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/atlas-factory-supervisor.yml'
+      - '.github/scripts/atlas-housekeeping.sh'
   workflow_run:
     workflows: ["Atlas 24h Product Factory"]
     types: [completed]
@@ -17,6 +21,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  housekeeping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Prune stale Atlas workflows, runs and factory branches
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ATLAS_KEEP_RUNS_PER_WORKFLOW: '8'
+          ATLAS_KEEP_FACTORY_BRANCH_SETS: '2'
+        run: bash .github/scripts/atlas-housekeeping.sh
+
   continuity:
     runs-on: ubuntu-latest
     timeout-minutes: 10
