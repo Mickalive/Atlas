@@ -43,30 +43,45 @@ jobs:
             exit 0
           fi
 
-          STATE=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/${REPO}/contents/state/factory_direction.json?ref=main" 2>/dev/null || echo '{}')
-          CONTINUE=$(jq -r '.continue // true' <<<"$STATE" 2>/dev/null || echo true)
-          STATUS=$(jq -r '.release_status // "BUILDING"' <<<"$STATE" 2>/dev/null || echo BUILDING)
-          NEXT=$(jq -r '.next_focus // empty' <<<"$STATE" 2>/dev/null || true)
+          # Machine state is authoritative. Retrieval or schema failure is a
+          # stop condition, never implicit permission to launch more agents.
+          set +e
+          STATE=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/${REPO}/contents/state/factory_direction.json?ref=main" 2>/dev/null)
+          STATE_RC=$?
+          set -e
+          if [[ "$STATE_RC" -ne 0 || -z "$STATE" ]]; then
+            echo '::error::Unable to read accepted factory state; refusing autonomous dispatch.'
+            exit 0
+          fi
+          if ! jq -e '.release_status and (.continue|type=="boolean") and .reason and .next_focus' <<<"$STATE" >/dev/null 2>&1; then
+            echo '::error::Invalid factory_direction.json; refusing autonomous dispatch.'
+            exit 0
+          fi
+
+          CONTINUE=$(jq -r '.continue' <<<"$STATE")
+          STATUS=$(jq -r '.release_status' <<<"$STATE")
+          NEXT=$(jq -r '.next_focus // empty' <<<"$STATE")
+
+          if [[ "$CONTINUE" != true ]]; then
+            echo "Atlas autonomous continuation stopped by accepted state: status=$STATUS"
+            exit 0
+          fi
+          [[ -n "$NEXT" ]] || { echo '::error::continue=true without next_focus; refusing blind loop.'; exit 1; }
 
           LATEST=$(jq '[.[] | select(.status=="completed")] | sort_by(.createdAt) | last // {}' <<<"$RUNS")
           ID=$(jq -r '.databaseId // empty' <<<"$LATEST")
           CONCLUSION=$(jq -r '.conclusion // empty' <<<"$LATEST")
 
           if [[ -z "$ID" ]]; then
-            echo 'No prior factory run; dispatching bootstrap.'
+            echo 'No prior factory run; dispatching bootstrap from accepted continue=true state.'
             gh workflow run "$WF" --repo "$REPO" --ref main
             exit 0
           fi
 
           if [[ "$CONCLUSION" != success ]]; then
-            echo "Latest factory run $ID concluded $CONCLUSION. Watchdog handles infrastructure retries; supervisor will not hide a real failure."
+            echo "Latest factory run $ID concluded $CONCLUSION. Watchdog handles defensible infrastructure retries; supervisor will not hide a real failure."
             exit 0
           fi
 
-          if [[ "$CONTINUE" == true ]]; then
-            [[ -n "$NEXT" ]] || { echo '::error::continue=true without next_focus; refusing blind loop.'; exit 1; }
-            echo "Continuing Atlas: status=$STATUS next_focus=$NEXT"
-            gh workflow run "$WF" --repo "$REPO" --ref main
-          else
-            echo "Atlas autonomous continuation stopped by accepted state: status=$STATUS"
-          fi
+          echo "Continuing Atlas: status=$STATUS next_focus=$NEXT"
+          gh workflow run "$WF" --repo "$REPO" --ref main
