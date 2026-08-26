@@ -35,7 +35,7 @@ if grep -Eq 'ATLAS_DATA_MODE.{0,20}(fixture|mock)' src 2>/dev/null; then
   echo 'Fixture mode hooks detected; verifying no hard-coded fake result banner is used as live data.'
 fi
 
-if grep -RIE --exclude-dir=node_modules --exclude-dir=.git '(sk-[A-Za-z0-9_-]{20,}|api[_-]?token[[:space:]]*[:=][[:space:]]*["'"'][^"'"']+["'"'])' . >/tmp/atlas-secret-scan.txt 2>/dev/null; then
+if grep -RIE --exclude-dir=node_modules --exclude-dir=.git '(sk-[A-Za-z0-9_-]{20,}|ATLASSIAN_ORG_API_KEY[[:space:]]*[:=][[:space:]]*[A-Za-z0-9_-]{16,})' . >/tmp/atlas-secret-scan.txt 2>/dev/null; then
   echo 'Potential hard-coded secret found:' >&2
   cat /tmp/atlas-secret-scan.txt >&2
   exit 1
