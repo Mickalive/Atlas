@@ -1,0 +1,33 @@
+{
+  "name": "atlas-renewal-audit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Atlas — Atlassian Renewal FinOps / License Cost Optimizer (read-only V1). Read-only renewal audit producing ESTIMATED ANNUAL SAVINGS from defensible evidence.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "node scripts/static-gates.mjs",
+    "build": "node scripts/static-gates.mjs && tsc -p tsconfig.json --noEmit",
+    "fixture:scan": "node --experimental-strip-types src/dev/runFixtureScan.ts",
+    "parity:local": "bash .github/scripts/forge-parity-check.sh"
+  },
+  "dependencies": {
+    "@forge/api": "^8.0.4",
+    "@forge/bridge": "^6.3.0",
+    "@forge/kvs": "^2.0.4",
+    "@forge/react": "^12.1.2",
+    "@forge/resolver": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "tsx": "^4.23.12",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.11",
+    "yaml": "^2.9.0"
+  }
+}

@@ -1,0 +1,51 @@
+manifestVersion: 1
+# App id (ARI) is assigned by `forge register` on first registration.
+# See docs/BUILDER_HANDOFF.md - live verification is blocked only by credentials.
+
+modules:
+  jira:adminPage:
+    - key: atlas-dashboard-page
+      function: atlas-dashboard-fn
+      title: Atlas - Cut My Atlassian Bill
+      useAsConfig: true
+      useAsGetStarted: true
+
+  function:
+    - key: atlas-dashboard-fn
+      handler: frontend/dashboard.renderDashboard
+    - key: atlas-resolver-fn
+      handler: backend/index.handler
+    - key: atlas-scan-chunk-fn
+      handler: backend/index.scanChunkHandler
+
+  # Exactly one scheduled trigger (feasibility section 8): resumes interrupted
+  # scans within the async-event runtime budget. The same ScanService engine
+  # powers resolver-driven chunks; there is no separate background logic.
+  scheduledTrigger:
+    - key: atlas-scan-resume
+      function: atlas-scan-chunk-fn
+      interval: fiveMinutes
+
+licensing:
+  enabled: true
+
+permissions:
+  scopes:
+    # --- verified read budget (docs/API_FEASIBILITY.md section 8) ---
+    - read:license:jira
+    - read:application-role:jira
+    - read:user:jira
+    - read:group:jira
+    - read:avatar:jira
+    # Issue-derived activity evidence; deviation recorded and VERIFY-LIVE:
+    # docs/API_FEASIBILITY_ADDENDUM.md
+    - read:jira-work
+    - read:content-details:confluence
+    - read:user:confluence
+    - read:group:confluence
+  # No write scopes. No admin scopes. No egress remotes in V1:
+  # org-admin enrichment ships disabled and api.atlassian.com stays undeclared.
+
+runtime:
+  name: nodejs24.x
+  memoryMB: 512
