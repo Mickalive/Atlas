@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "partner_identity_verification_confirmed": false,
+  "security_contact_confirmed": false,
+  "privacy_policy_public_url": null,
+  "privacy_security_tab_confirmed": false,
+  "marketplace_partner_terms_confirmed": false,
+  "confirmed_at": null,
+  "notes": "Human-owned evidence only. Autonomous agents must never set these fields to true or invent a URL. MARKETPLACE_READY is forbidden until all required attestations are genuinely satisfied."
+}
