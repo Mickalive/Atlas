@@ -18,6 +18,7 @@ concurrency:
 
 env:
   ATLAS_MODEL: opencode/x-preview-f-free
+  ATLAS_NODE_VERSION: '24'
 
 jobs:
   api_architect:
@@ -32,7 +33,7 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Research current Atlassian API feasibility
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent api_architect "Produce the binding API feasibility map for the current Atlas V1. Verify current official Atlassian docs on the network; do not rely on stale memory."
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent api_architect "Produce the binding API feasibility map for the current Atlas V1. Verify current official Atlassian docs on the network; do not rely on stale memory. Respect docs/FORGE_PARITY_MODE.md: until credentials exist, design a real Forge gateway plus deterministic fixture gateway with identical downstream semantics."
       - name: Persist lane
         run: |
           git config user.name atlas-api-architect
@@ -51,7 +52,7 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Freeze sellable V1
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent market_product_architect "Research the current Atlassian Marketplace and freeze the narrowest sellable V1. Recoup and current license optimizers are real competitors."
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent market_product_architect "Research the current Atlassian Marketplace and freeze the narrowest sellable V1. Recoup and current license optimizers are real competitors. Fixture/demo mode must be visibly non-live and cannot alter the actual product logic."
       - name: Persist lane
         run: |
           git config user.name atlas-product-architect
@@ -70,7 +71,7 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Design adversarial safety gates
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent security_test_architect "Define the least-privilege security model and false-positive test matrix for a real Marketplace release."
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent security_test_architect "Define the least-privilege security model and false-positive test matrix for a real Marketplace release. Treat fixture/live separation, tenant isolation, partial scans and the Forge parity constraints as release-critical."
       - name: Persist lane
         run: |
           git config user.name atlas-security-architect
@@ -86,6 +87,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.ATLAS_NODE_VERSION }}
       - name: Mount research lanes
         run: |
           for lane in api product security; do
@@ -96,16 +100,20 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Build real Forge V1
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent implementation_builder "Build the actual Atlas V1 now. API=/tmp/atlas_api/docs/API_FEASIBILITY.md Product=/tmp/atlas_product/docs/PRODUCT_V1.md Security=/tmp/atlas_security/docs/SECURITY_TEST_PLAN.md. Copy/consume those decisions as needed. Do not stop at a plan."
-      - name: Run builder tests
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent implementation_builder "Build the actual Atlas V1 now. API=/tmp/atlas_api/docs/API_FEASIBILITY.md Product=/tmp/atlas_product/docs/PRODUCT_V1.md Security=/tmp/atlas_security/docs/SECURITY_TEST_PLAN.md. docs/FORGE_PARITY_MODE.md is binding. Build Forge-compatible production code plus a swappable fixture gateway; do not stop at a plan."
+      - name: Run host tests
         shell: bash
         run: |
           if [[ -f package.json ]]; then
-            npm install
+            if [[ -f package-lock.json ]]; then npm ci; else npm install; fi
             npm test --if-present
+            npm run typecheck --if-present
             npm run lint --if-present
             npm run build --if-present
           fi
+      - name: Forge parity container gate
+        shell: bash
+        run: bash .github/scripts/forge-parity-check.sh
       - name: Persist build
         if: always()
         run: |
@@ -130,7 +138,7 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Attack correctness
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent functional_redteam "Audit this exact builder snapshot. Your only durable output is audit/FUNCTIONAL.md; do not repair the app."
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent functional_redteam "Audit this exact builder snapshot. Attack fixture/live equivalence, false savings, partial scans, pricing math and all SAFE classifications. Your only durable output is audit/FUNCTIONAL.md; do not repair the app."
       - name: Persist audit
         run: |
           git reset -- . >/dev/null 2>&1 || true
@@ -158,7 +166,7 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Attack security and Marketplace readiness
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent security_redteam "Audit this exact builder snapshot. Security plan=/tmp/atlas_security_plan/docs/SECURITY_TEST_PLAN.md. Durable output only audit/SECURITY.md; do not repair the app."
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent security_redteam "Audit this exact builder snapshot. Security plan=/tmp/atlas_security_plan/docs/SECURITY_TEST_PLAN.md. Attack scope creep, tenant leakage, mock/live confusion, secret handling and unsafe remediation. Durable output only audit/SECURITY.md; do not repair the app."
       - name: Persist audit
         run: |
           git reset -- . >/dev/null 2>&1 || true
@@ -176,6 +184,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.ATLAS_NODE_VERSION }}
       - name: Checkout build and mount audits
         run: |
           git fetch origin "factory/${GITHUB_RUN_ID}/build:refs/remotes/origin/factory/${GITHUB_RUN_ID}/build"
@@ -187,16 +198,20 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Repair and integrate
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent release_integrator "Repair the build using /tmp/atlas_functional-audit/audit/FUNCTIONAL.md and /tmp/atlas_security-audit/audit/SECURITY.md. Produce one release candidate and docs/RELEASE_STATUS.md."
-      - name: Hard local gate
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent release_integrator "Repair the build using /tmp/atlas_functional-audit/audit/FUNCTIONAL.md and /tmp/atlas_security-audit/audit/SECURITY.md. docs/FORGE_PARITY_MODE.md is binding. Produce one release candidate and docs/RELEASE_STATUS.md."
+      - name: Hard host gate
         shell: bash
         run: |
           test -f manifest.yml || { echo '::error::Missing Forge manifest'; exit 1; }
           test -f package.json || { echo '::error::Missing package.json'; exit 1; }
-          npm install
+          if [[ -f package-lock.json ]]; then npm ci; else npm install; fi
           npm test --if-present
+          npm run typecheck --if-present
           npm run lint --if-present
           npm run build --if-present
+      - name: Hard Forge parity gate
+        shell: bash
+        run: bash .github/scripts/forge-parity-check.sh
       - name: Persist candidate
         run: |
           git config user.name atlas-release-integrator
@@ -219,25 +234,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.ATLAS_NODE_VERSION }}
       - name: Checkout candidate
         run: |
           git fetch origin "factory/${GITHUB_RUN_ID}/candidate:refs/remotes/origin/factory/${GITHUB_RUN_ID}/candidate"
           git switch -C release "origin/factory/${GITHUB_RUN_ID}/candidate"
-      - name: Re-run local gates
-        run: |
-          npm install
-          npm test --if-present
-          npm run lint --if-present
-          npm run build --if-present
+      - name: Re-run Forge parity gate
+        run: bash .github/scripts/forge-parity-check.sh
       - name: Forge registration, deploy and install when configured
         shell: bash
         run: |
           if [[ -z "$FORGE_EMAIL" || -z "$FORGE_API_TOKEN" ]]; then
             echo 'FORGE_LIVE_GATE=SKIPPED_MISSING_FORGE_CREDENTIALS'
+            echo 'Candidate is promoted on strict local Forge parity only.'
             exit 0
           fi
 
           npm install -g @forge/cli@latest
+          forge settings set usage-analytics false || true
           forge whoami
 
           if grep -Eq 'ari:cloud:ecosystem::app/0{8}-0{4}-0{4}-0{4}-0{12}|ATLAS_PLACEHOLDER' manifest.yml; then
