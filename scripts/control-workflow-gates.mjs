@@ -60,10 +60,11 @@ if (supervisor) {
   if (!supervisor.text.includes("STATUS\" == 'MARKETPLACE_READY'")) failures.push('supervisor lacks Marketplace-ready stop condition');
   if (!supervisor.text.includes('ATLAS_CONTINUITY=DISPATCH_FRESH_CYCLE')) failures.push('supervisor lacks fresh-cycle recovery dispatch');
   if (!supervisor.text.includes('ATLAS_CONTINUITY=STATE_SELF_HEALED')) failures.push('supervisor cannot self-heal prematurely stopped/corrupt state');
+  if (!supervisor.text.includes('atlas-housekeeping.sh')) failures.push('supervisor no longer invokes canonical Actions housekeeping');
   if (/24h autonomous cycle cap|runaway busywork|RECENT.*-ge/i.test(supervisor.text)) failures.push('supervisor contains a run cap that can halt unfinished work');
   if (supervisor.doc?.permissions?.contents !== 'write' || supervisor.doc?.permissions?.actions !== 'write') {
     failures.push('supervisor lacks contents/actions write permissions required for self-heal + dispatch');
-  } else passes.push('supervisor has self-heal and dispatch permissions');
+  } else passes.push('supervisor has self-heal, housekeeping and dispatch permissions');
 }
 
 if (watchdog) {
@@ -80,6 +81,20 @@ if (mainCi) {
   if (!mainCi.text.includes('AUTHENTICATED FORGE LINT WHEN AVAILABLE')) failures.push('main CI lacks authenticated Forge lint hook');
   if (!mainCi.text.includes('tsconfig.frontend.json')) failures.push('main CI does not track frontend typecheck config changes');
   else passes.push('main CI covers frontend types, dependency audit and Forge auth hook');
+}
+
+try {
+  const housekeeping = readFileSync('.github/scripts/atlas-housekeeping.sh', 'utf8');
+  for (const path of paths) {
+    if (!housekeeping.includes(path)) failures.push(`housekeeping allowlist lost canonical workflow: ${path}`);
+  }
+  if (!housekeeping.includes('/actions/workflows/') || !housekeeping.includes('/disable')) failures.push('housekeeping cannot disable obsolete workflow registrations');
+  if (!housekeeping.includes('/actions/runs/') || !housekeeping.includes('PRUNE_CANONICAL_RUN')) failures.push('housekeeping cannot prune stale Actions runs');
+  if (!housekeeping.includes('/git/refs/heads/') || !housekeeping.includes('factory/continuation')) failures.push('housekeeping cannot prune stale factory branches while preserving continuation');
+  if (!housekeeping.includes('KEEP_FACTORY_BRANCH_SETS')) failures.push('housekeeping lacks recent-factory salvage retention');
+  passes.push('housekeeping protects canonical workflows, short run history and resumable continuation');
+} catch (error) {
+  failures.push(`Atlas housekeeping missing/invalid: ${error instanceof Error ? error.message : String(error)}`);
 }
 
 try {
