@@ -2,17 +2,11 @@
 /**
  * Atlas static gates (run via `npm run lint` / `npm run build`).
  *
- * Implements the Builder-owned portions of docs/SECURITY_TEST_PLAN.md:
- *  - GATE-2  scope budget: manifest scopes == verified allowlist, each
- *            exercised by a named gateway call (SEC-2a / BLK-5).
- *  - GATE-4  fixture hygiene: no sample-data literals inside engine modules,
- *            fixture transport unreachable from production entrypoints (ADV-3),
- *            no activation-mode conditionals in core modules (AC10).
- *  - Purity  core modules import no SDK/transport/node built-ins.
- *  - LOG-3   extended secret patterns beyond the parity script.
+ * Implements the Builder-owned portions of docs/SECURITY_TEST_PLAN.md plus
+ * current Forge manifest invariants verified against Atlassian docs.
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { parse } from 'yaml';
 
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -20,6 +14,7 @@ const fail = [];
 const ok = [];
 
 function listFiles(dir, exts, acc = []) {
+  if (!existsSync(dir)) return acc;
   for (const entry of readdirSync(dir)) {
     const p = join(dir, entry);
     if (statSync(p).isDirectory()) {
@@ -33,11 +28,126 @@ function listFiles(dir, exts, acc = []) {
 }
 
 // ---------------------------------------------------------------------------
-// GATE-2: scope budget
+// Forge manifest structure + GATE-2 scope budget
 // ---------------------------------------------------------------------------
 
 const manifestPath = join(ROOT, 'manifest.yml');
 const manifest = parse(readFileSync(manifestPath, 'utf8'));
+
+// Current Forge requires app/modules/permissions as the core top-level shape.
+if (!manifest?.app || typeof manifest.app !== 'object') {
+  fail.push('forge-manifest: required top-level app object missing');
+}
+if (!manifest?.modules || typeof manifest.modules !== 'object') {
+  fail.push('forge-manifest: required top-level modules object missing');
+}
+if (!manifest?.permissions || typeof manifest.permissions !== 'object') {
+  fail.push('forge-manifest: required top-level permissions object missing');
+}
+if ('runtime' in (manifest ?? {})) {
+  fail.push('forge-manifest: runtime must live under app.runtime, not top-level');
+}
+if ('licensing' in (manifest ?? {})) {
+  fail.push('forge-manifest: licensing must live under app.licensing, not top-level');
+}
+
+const appId = manifest?.app?.id;
+if (typeof appId !== 'string' || !/^ari:cloud:ecosystem::app\/[0-9a-f-]{36}$/i.test(appId)) {
+  fail.push('forge-manifest: app.id must be a Forge app ARI (real or pre-registration sentinel)');
+} else {
+  ok.push(
+    appId.endsWith('/00000000-0000-0000-0000-000000000000')
+      ? 'forge-manifest: pre-registration app.id sentinel present'
+      : 'forge-manifest: registered app.id shape present',
+  );
+}
+
+const runtimeName = manifest?.app?.runtime?.name;
+if (runtimeName !== 'nodejs24.x') fail.push(`parity: app.runtime.name must be nodejs24.x (got ${runtimeName})`);
+else ok.push('parity: app.runtime.name nodejs24.x');
+
+const memoryMB = manifest?.app?.runtime?.memoryMB;
+if (memoryMB !== 512) fail.push(`parity: app.runtime.memoryMB must be 512 (got ${memoryMB})`);
+else ok.push('parity: app.runtime.memoryMB 512');
+
+if (!manifest?.app?.licensing?.enabled) {
+  fail.push('forge-manifest: app.licensing.enabled missing (self-license detection)');
+} else {
+  ok.push('forge-manifest: app.licensing.enabled true');
+}
+
+// Modern UI Kit must use resource + render:native + resolver rather than the
+// legacy direct-function adminPage shape.
+const resources = Array.isArray(manifest?.resources) ? manifest.resources : [];
+const resourceByKey = new Map(resources.map((r) => [r?.key, r]));
+const adminPages = manifest?.modules?.['jira:adminPage'] ?? [];
+if (!Array.isArray(adminPages) || adminPages.length !== 1) {
+  fail.push(`forge-manifest: expected exactly one jira:adminPage, got ${Array.isArray(adminPages) ? adminPages.length : 'invalid'}`);
+} else {
+  const page = adminPages[0];
+  if (!page?.resource || !resourceByKey.has(page.resource)) {
+    fail.push('forge-manifest: jira:adminPage must reference a declared UI resource');
+  }
+  if (page?.render !== 'native') {
+    fail.push('forge-manifest: modern UI Kit jira:adminPage must set render: native');
+  }
+  if (!page?.resolver?.function) {
+    fail.push('forge-manifest: jira:adminPage must reference a resolver function');
+  }
+  if ('function' in (page ?? {})) {
+    fail.push('forge-manifest: modern UI Kit jira:adminPage must not use legacy direct function property');
+  }
+}
+
+for (const resource of resources) {
+  if (typeof resource?.key !== 'string' || resource.key.length > 23) {
+    fail.push(`forge-manifest: resource key invalid/too long: ${String(resource?.key)}`);
+  }
+  if (typeof resource?.path !== 'string' || !existsSync(join(ROOT, resource.path))) {
+    fail.push(`forge-manifest: resource path missing: ${String(resource?.path)}`);
+  }
+}
+if (!fail.some((f) => f.startsWith('forge-manifest: jira:adminPage')) && resources.length > 0) {
+  ok.push('forge-manifest: modern UI Kit resource/adminPage wiring present');
+}
+
+const functions = Array.isArray(manifest?.modules?.function) ? manifest.modules.function : [];
+const functionByKey = new Map(functions.map((f) => [f?.key, f]));
+for (const fn of functions) {
+  if (typeof fn?.key !== 'string' || fn.key.length > 23) {
+    fail.push(`forge-manifest: function key invalid/too long: ${String(fn?.key)}`);
+  }
+  if (typeof fn?.handler !== 'string' || !/^index\.[A-Za-z0-9_-]+$/.test(fn.handler)) {
+    fail.push(`forge-manifest: function handler must use src-root index.<export>: ${String(fn?.handler)}`);
+  }
+}
+if (!existsSync(join(ROOT, 'src', 'index.ts')) && !existsSync(join(ROOT, 'src', 'index.js'))) {
+  fail.push('forge-manifest: src-root index entrypoint missing');
+}
+
+const sched = manifest?.modules?.scheduledTrigger ?? [];
+if (!Array.isArray(sched)) {
+  fail.push('forge-manifest: scheduledTrigger must be an array');
+} else {
+  if (sched.length > 5) fail.push('feasibility: more than 5 scheduled triggers');
+  for (const trigger of sched) {
+    if (!['fiveMinute', 'hour', 'day', 'week'].includes(trigger?.interval)) {
+      fail.push(`forge-manifest: unsupported scheduled interval ${String(trigger?.interval)}`);
+    }
+    const fn = functionByKey.get(trigger?.function);
+    if (!fn) {
+      fail.push(`forge-manifest: scheduled trigger references missing function ${String(trigger?.function)}`);
+      continue;
+    }
+    const timeout = fn.timeoutSeconds;
+    if (!Number.isInteger(timeout) || timeout < 800 || timeout > 900) {
+      fail.push(`forge-manifest: scheduled worker timeoutSeconds must cover Atlas 800s chunk and be <=900 (got ${timeout})`);
+    }
+  }
+}
+if (!fail.some((f) => f.startsWith('forge-manifest: scheduled'))) {
+  ok.push('forge-manifest: scheduled worker wiring + timeout valid');
+}
 
 const declaredScopes = manifest?.permissions?.scopes ?? [];
 const SCOPE_ALLOWLIST = [
@@ -65,17 +175,10 @@ for (const allowed of SCOPE_ALLOWLIST) {
 ok.push(`GATE-2: manifest scope set equals verified budget (${declaredScopes.length} scopes)`);
 
 // --- GATE-2 usage proof (SEC-H1) -------------------------------------------
-// Set equality alone cannot detect a declared-but-never-exercised scope: a
-// probe added one scope string in three documentation locations and stayed
-// green. Each manifest scope must therefore map to a SCOPE_BUDGET entry whose
-// `calls` include at least one name that appears as an actual call site in a
-// transport implementation. A scope exercised by no real call fails here.
-
 function extractScopeBudgetCalls(source) {
   const block = source.match(/export const SCOPE_BUDGET[\s\S]*?= \{([\s\S]*?)\n\};/);
   if (!block) return null;
   const calls = {};
-  // Entries may be single-line or multi-line; bodies contain no nested braces.
   const entryRe = /'([^']+)':\s*\{([^{}]*)\}/g;
   let m;
   while ((m = entryRe.exec(block[1])) !== null) {
@@ -128,14 +231,6 @@ if (budgetCalls !== null) {
   }
 }
 
-const runtimeName = manifest?.runtime?.name;
-if (runtimeName !== 'nodejs24.x') fail.push(`parity: runtime must be nodejs24.x (got ${runtimeName})`);
-else ok.push('parity: runtime nodejs24.x');
-if (!manifest?.licensing?.enabled) fail.push('manifest: licensing.enabled missing (self-license detection per feasibility row 14)');
-else ok.push('manifest: licensing.enabled true');
-const sched = manifest?.modules?.scheduledTrigger ?? [];
-if (sched.length > 5) fail.push('feasibility 2.3: more than 5 scheduled triggers');
-
 // ---------------------------------------------------------------------------
 // GATE-4 / AC10: fixture hygiene + mode-conditionals + purity
 // ---------------------------------------------------------------------------
@@ -147,7 +242,6 @@ const FORBIDDEN_CORE_TOKENS = [/ATLAS_DATA_MODE/, /process\.env/, /selectDataMod
 for (const file of coreFiles) {
   const rel = relative(ROOT, file);
   const text = readFileSync(file, 'utf8');
-  // Remove the exact provenance enum token before scanning for mode words.
   const stripped = text.replaceAll('FIXTURE', '').replaceAll('"FIXTURE"', '');
   if (/fixture|Fixture/i.test(stripped)) {
     fail.push(`GATE-4/FIX-6: engine module contains sample-data literal: ${rel}`);
@@ -209,7 +303,6 @@ for (const file of scanTargets) {
   const rel = relative(ROOT, file);
   const lines = readFileSync(file, 'utf8').split('\n');
   lines.forEach((line, i) => {
-    // The scrubber/logger may mention pattern shapes; ignore redaction code.
     if (/scrub|redact/i.test(line)) return;
     for (const [re, label] of SECRET_PATTERNS) {
       if (re.test(line)) {
@@ -219,8 +312,6 @@ for (const file of scanTargets) {
   });
 }
 if (!fail.some((f) => f.startsWith('LOG-3'))) ok.push('LOG-3: secret pattern scan clean');
-
-// ---------------------------------------------------------------------------
 
 console.log('');
 for (const line of ok) console.log(`  PASS  ${line}`);
