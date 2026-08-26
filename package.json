@@ -13,9 +13,9 @@
     "typecheck:backend": "tsc -p tsconfig.json --noEmit",
     "typecheck:frontend": "tsc -p tsconfig.frontend.json --noEmit",
     "typecheck": "npm run typecheck:backend && npm run typecheck:frontend",
-    "lint": "node scripts/static-gates.mjs",
+    "lint": "node scripts/static-gates.mjs && node scripts/control-workflow-gates.mjs",
     "audit:high": "npm audit --audit-level=high",
-    "build": "node scripts/static-gates.mjs && npm run typecheck",
+    "build": "npm run lint && npm run typecheck",
     "fixture:scan": "npx tsx src/dev/runFixtureScan.ts",
     "parity:local": "bash .github/scripts/forge-parity-check.sh"
   },
