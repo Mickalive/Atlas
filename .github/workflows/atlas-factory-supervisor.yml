@@ -17,8 +17,8 @@ permissions:
   actions: write
 
 concurrency:
-  group: atlas-factory-supervisor
-  cancel-in-progress: true
+  group: atlas-factory-orchestrator
+  cancel-in-progress: false
 
 jobs:
   housekeeping:
@@ -46,6 +46,21 @@ jobs:
           set -euo pipefail
           REPO="$GITHUB_REPOSITORY"
           WF='atlas-factory.yml'
+
+          active_factory_count() {
+            gh run list --repo "$REPO" --workflow "$WF" --limit 30 --json status \
+              --jq '[.[]|select(.status!="completed")]|length' 2>/dev/null || echo 0
+          }
+
+          dispatch_if_idle() {
+            local active_now
+            active_now=$(active_factory_count)
+            if [[ "$active_now" -gt 0 ]]; then
+              echo 'ATLAS_CONTINUITY=DISPATCH_SKIPPED_FACTORY_APPEARED'
+              return 0
+            fi
+            gh workflow run "$WF" --repo "$REPO" --ref main
+          }
 
           RUNS=$(gh run list --repo "$REPO" --workflow "$WF" --limit 50 --json databaseId,status,conclusion,createdAt,attempt 2>/dev/null || echo '[]')
           ACTIVE=$(jq '[.[] | select(.status != "completed")] | length' <<<"$RUNS" 2>/dev/null || echo 0)
@@ -109,7 +124,7 @@ jobs:
 
           if [[ -z "$ID" ]]; then
             echo "ATLAS_CONTINUITY=BOOTSTRAP status=$STATUS"
-            gh workflow run "$WF" --repo "$REPO" --ref main
+            dispatch_if_idle
             exit 0
           fi
 
@@ -128,4 +143,4 @@ jobs:
           fi
 
           echo "ATLAS_CONTINUITY=DISPATCH_FRESH_CYCLE status=$STATUS prior_run=$ID prior_conclusion=${CONCLUSION:-unknown} next_focus=$NEXT"
-          gh workflow run "$WF" --repo "$REPO" --ref main
+          dispatch_if_idle
