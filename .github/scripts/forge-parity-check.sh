@@ -52,10 +52,10 @@ if grep -RIE --exclude-dir=node_modules --exclude-dir=.git '(sk-[A-Za-z0-9_-]{20
   exit 1
 fi
 
-# Local Forge validation is the authoritative pre-deploy schema/module check.
-# Running it in the network-isolated container prevents false confidence from
-# our own hand-written parity assumptions.
-forge lint --non-interactive
+# `forge lint` is local pre-deployment validation. It has no --non-interactive
+# flag in the current CLI; the analytics opt-out above removes its only first-
+# run prompt in CI.
+forge lint
 
 npm test --if-present
 npm run typecheck --if-present
