@@ -4,6 +4,18 @@ import { invoke } from '@forge/bridge';
 
 const usd = (n) => `$${Number(n ?? 0).toLocaleString('en-US')}`;
 
+/**
+ * Forge bridge response shapes are runtime resolver contracts rather than
+ * statically generated client types. Keep that dynamic boundary explicit so
+ * checkJs still validates UI Kit components/props everywhere else.
+ * @param {any} key
+ * @param {any} [payload]
+ * @returns {Promise<any>}
+ */
+const callResolver = async (key, payload) => (
+  payload === undefined ? invoke(key) : invoke(key, payload)
+);
+
 const RecommendationCard = ({ rec }) => {
   const [open, setOpen] = useState(false);
   const money = rec.money
@@ -58,12 +70,12 @@ const Dashboard = () => {
     let cancelled = false;
     let timer = null;
     const tick = async () => {
-      const s = await invoke('poll');
+      const s = await callResolver('poll');
       if (!cancelled) setSnap(s);
       if (s.running) timer = setTimeout(tick, 2500);
     };
     (async () => {
-      const s = await invoke('bootstrap');
+      const s = await callResolver('bootstrap');
       if (!cancelled) setSnap(s);
       if (s.running) timer = setTimeout(tick, 2500);
     })();
@@ -137,7 +149,7 @@ const Dashboard = () => {
             <Button
               appearance="primary"
               onClick={async () => {
-                const s = await invoke('setRenewalDate', { nextRenewalDate: renewalInput });
+                const s = await callResolver('setRenewalDate', { nextRenewalDate: renewalInput });
                 setSnap({ ...s, running: false });
               }}
             >
@@ -181,16 +193,16 @@ const Dashboard = () => {
       </Text>
 
       <Stack space="space.100" alignInline="start">
-        <Button onClick={async () => setExportText(await invoke('buildExport', { format: 'markdown' }).then((r) => r.content))}>
+        <Button onClick={async () => setExportText((await callResolver('buildExport', { format: 'markdown' })).content)}>
           Renewal action brief (Markdown)
         </Button>
-        <Button onClick={async () => setExportText(await invoke('buildExport', { format: 'csv' }).then((r) => r.content))}>
+        <Button onClick={async () => setExportText((await callResolver('buildExport', { format: 'csv' })).content)}>
           Export CSV
         </Button>
         <Button
           appearance="subtle"
           onClick={async () => {
-            await invoke('rescan');
+            await callResolver('rescan');
           }}
         >
           Rescan
