@@ -1,7 +1,7 @@
 {
   "release_status": "PARITY_READY_AWAITING_CREDENTIALS",
-  "continue": false,
-  "reason": "Forge-parity candidate accepted; waiting for live Atlassian credentials.",
-  "next_focus": "Connect Forge/Atlassian credentials and run the live gate.",
-  "updated_at": "2026-08-26T08:05:00Z"
+  "continue": true,
+  "reason": "Forge-parity work remains unfinished until authenticated Forge validation, live Jira verification and Marketplace-readiness gates are complete. Missing credentials are a blocker for live verification, not permission to stop autonomous product hardening.",
+  "next_focus": "Continue offline release hardening and repair all deterministic gates; re-check Forge credentials each cycle and immediately run authenticated lint/deploy/install when available.",
+  "updated_at": "2026-08-26T20:32:00Z"
 }
