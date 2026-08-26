@@ -13,8 +13,8 @@ permissions:
   actions: write
 
 concurrency:
-  group: atlas-watchdog
-  cancel-in-progress: true
+  group: atlas-factory-orchestrator
+  cancel-in-progress: false
 
 jobs:
   recover_transient_failures:
@@ -30,6 +30,21 @@ jobs:
           REPO="$GITHUB_REPOSITORY"
           WF='atlas-factory.yml'
 
+          active_factory_count() {
+            gh run list --repo "$REPO" --workflow "$WF" --limit 30 --json status \
+              --jq '[.[]|select(.status!="completed")]|length' 2>/dev/null || echo 0
+          }
+
+          dispatch_if_idle() {
+            local active_now
+            active_now=$(active_factory_count)
+            if [[ "$active_now" -gt 0 ]]; then
+              echo 'ATLAS_WATCHDOG=DISPATCH_SKIPPED_FACTORY_APPEARED'
+              return 0
+            fi
+            gh workflow run "$WF" --repo "$REPO" --ref main || true
+          }
+
           STATE=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/${REPO}/contents/state/factory_direction.json?ref=main" 2>/dev/null || true)
           STATUS=$(jq -r '.release_status // "UNKNOWN"' <<<"${STATE:-{}}" 2>/dev/null || echo UNKNOWN)
           if [[ "$STATUS" == 'MARKETPLACE_READY' ]]; then
@@ -37,7 +52,7 @@ jobs:
             exit 0
           fi
 
-          ACTIVE=$(gh run list --repo "$REPO" --workflow "$WF" --limit 30 --json status --jq '[.[]|select(.status!="completed")]|length' 2>/dev/null || echo 0)
+          ACTIVE=$(active_factory_count)
           if [[ "$ACTIVE" -gt 0 ]]; then
             echo 'ATLAS_WATCHDOG=ACTIVE_FACTORY_PRESENT'
             exit 0
@@ -46,7 +61,7 @@ jobs:
           LATEST=$(gh run list --repo "$REPO" --workflow "$WF" --limit 30 --json databaseId,status,conclusion,createdAt,attempt --jq '[.[]|select(.status=="completed")]|sort_by(.createdAt)|last//empty' 2>/dev/null || true)
           if [[ -z "$LATEST" ]]; then
             echo 'ATLAS_WATCHDOG=BACKUP_BOOTSTRAP_NO_FACTORY_HISTORY'
-            gh workflow run "$WF" --repo "$REPO" --ref main || true
+            dispatch_if_idle
             exit 0
           fi
 
@@ -64,7 +79,7 @@ jobs:
           if [[ "$CONCLUSION" == success ]]; then
             if [[ "$age" -ge 600 ]]; then
               echo "ATLAS_WATCHDOG=BACKUP_CONTINUITY_DISPATCH stale_success_run=$ID age=${age}s"
-              gh workflow run "$WF" --repo "$REPO" --ref main || true
+              dispatch_if_idle
             else
               echo "ATLAS_WATCHDOG=WAITING_FOR_PRIMARY_SUPERVISOR run=$ID age=${age}s"
             fi
@@ -74,7 +89,7 @@ jobs:
           case "$CONCLUSION" in failure|timed_out|cancelled) ;; *)
             if [[ "$age" -ge 600 ]]; then
               echo "ATLAS_WATCHDOG=BACKUP_CONTINUITY_DISPATCH unknown_conclusion=$CONCLUSION run=$ID"
-              gh workflow run "$WF" --repo "$REPO" --ref main || true
+              dispatch_if_idle
             fi
             exit 0
             ;;
@@ -84,7 +99,7 @@ jobs:
           # local retry budget: exhaustion immediately becomes a fresh cycle.
           if [[ "$ATTEMPT" -ge 3 ]]; then
             echo "ATLAS_WATCHDOG=LOCAL_ATTEMPTS_EXHAUSTED run=$ID attempt=$ATTEMPT; dispatching fresh cycle."
-            gh workflow run "$WF" --repo "$REPO" --ref main || true
+            dispatch_if_idle
             exit 0
           fi
 
@@ -100,7 +115,7 @@ jobs:
           set -e
           if [[ "$RC" -ne 0 ]]; then
             echo '::warning::Unable to inspect failed-run logs. Dispatching a fresh cycle so log retrieval cannot stop Atlas.'
-            gh workflow run "$WF" --repo "$REPO" --ref main || true
+            dispatch_if_idle
             exit 0
           fi
 
@@ -122,4 +137,4 @@ jobs:
           # terminal: a fresh multi-agent cycle gets the current main + latest
           # integration checkpoint and is responsible for repairing it.
           echo "ATLAS_WATCHDOG=DETERMINISTIC_FAILURE run=$ID; dispatching fresh repair cycle."
-          gh workflow run "$WF" --repo "$REPO" --ref main || true
+          dispatch_if_idle
