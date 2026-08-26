@@ -1,3 +1,19 @@
 node_modules/
 dist/
+coverage/
+.cache/
+.tmp/
 *.log
+
+# Local credentials / developer state must never enter git.
+.env
+.env.*
+!.env.example
+.forge/
+*.pem
+*.key
+*.p12
+*.pfx
+
+.DS_Store
+Thumbs.db
