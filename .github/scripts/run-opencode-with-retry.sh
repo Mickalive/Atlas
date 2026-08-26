@@ -13,7 +13,7 @@ trap 'rm -f "$LOG"' EXIT
 # be hidden behind infrastructure retries.
 TRANSIENT_RE='(ATLAS_TRANSIENT_OX_|network_error|NetworkError|network error|fetch failed|APIConnectionError|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|ETIMEDOUT|timed out|socket hang up|HTTP[^0-9]*(429|500|502|503|504)|rate.?limit|service unavailable|bad gateway|gateway timeout|temporar(y|ily) unavailable|upstream request failed|endpoint is unavailable|unexpected server error|internal server error|provider[^\n]*(unavailable|overloaded|capacity)|server[^\n]*overloaded|try again later|UnknownError|err_[A-Za-z0-9]+|runner has received a shutdown signal|runner service is stopped|lost communication with the runner)'
 
-CONTROL_PATHS=(ATLAS_MASTER_PROMPT.md AGENTS.md PRODUCT_CONTRACT.md docs/FORGE_PARITY_MODE.md docs/agents/AGENT_CARDS.md .opencode/agents .github/workflows .github/scripts)
+CONTROL_PATHS=(ATLAS_MASTER_PROMPT.md AGENTS.md PRODUCT_CONTRACT.md docs/FORGE_PARITY_MODE.md docs/agents/AGENT_CARDS.md state/human_release_attestations.json .opencode/agents .github/workflows .github/scripts)
 
 restore_control_plane() {
   [[ -n "$START_HEAD" ]] || return 0
