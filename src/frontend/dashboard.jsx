@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import ForgeReconciler, { Text, Button, Heading, Stack, SectionMessage, Textfield, DynamicTable } from '@forge/react';
+import ForgeReconciler, { Text, Button, Heading, Stack, SectionMessage, Textfield, Label, DynamicTable } from '@forge/react';
 import { invoke } from '@forge/bridge';
 
 const usd = (n) => `$${Number(n ?? 0).toLocaleString('en-US')}`;
@@ -11,12 +11,10 @@ const RecommendationCard = ({ rec }) => {
     : 'quote required';
   return (
     <Stack space="space.100">
-      <Text size="small">
-        **[{rec.risk.klass}]** {rec.what} - {money}{' '}
-        <Button appearance="subtle" onClick={() => setOpen(!open)}>
-          {open ? 'hide evidence' : 'why?'}
-        </Button>
-      </Text>
+      <Text size="small">[{rec.risk.klass}] {rec.what} - {money}</Text>
+      <Button appearance="subtle" onClick={() => setOpen(!open)}>
+        {open ? 'hide evidence' : 'why?'}
+      </Button>
       {open && (
         <Stack space="space.050">
           <Text size="small">WHY: {rec.why.ruleId} ({rec.why.thresholdSummary})</Text>
@@ -102,7 +100,7 @@ const Dashboard = () => {
       )}
 
       <Heading as="h1">ESTIMATED ANNUAL SAVINGS</Heading>
-      <Text size="largest">{usd(vm.hero.displayDollars)} / year</Text>
+      <Text size="large">{usd(vm.hero.displayDollars)} / year</Text>
       <Text size="medium">
         Safe now: {usd(vm.hero.split.safeNowDollars)} {'\u00b7'} Review pool: {usd(vm.hero.split.reviewPoolDollars)}
         {vm.hero.quoteRequiredCount > 0 ? ` \u00b7 quote-required items: ${vm.hero.quoteRequiredCount}` : ''}
@@ -129,8 +127,9 @@ const Dashboard = () => {
         <Stack space="space.100">
           <Text>{vm.renewalStrip.promptText}</Text>
           <Stack space="space.100" alignInline="start">
+            <Label labelFor="atlas-renewal-date">Next renewal date (YYYY-MM-DD)</Label>
             <Textfield
-              label="Next renewal date (YYYY-MM-DD)"
+              id="atlas-renewal-date"
               name="renewal"
               value={renewalInput}
               onChange={(e) => setRenewalInput(e.target.value)}
