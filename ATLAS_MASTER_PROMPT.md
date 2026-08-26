@@ -44,7 +44,11 @@ Every configured agent has exactly one canonical operating card in `docs/agents/
 
 Machine state lives at `state/factory_direction.json`. Allowed release statuses: `BUILDING`, `PARITY_READY_AWAITING_CREDENTIALS`, `LIVE_DEV_VERIFIED`, `MARKETPLACE_READY`, `BLOCKED_HUMAN`.
 
-`continue=true` requires a concrete high-value `next_focus`. `continue=false` when parity-ready or when human credentials/decision are genuinely required. Supervisor launches another cycle only from accepted state and only when none is active. Watchdog retries only defensible transient infrastructure failures. Neither hides real product/test failure.
+**`MARKETPLACE_READY` is the only autonomous stop state.** Every other status is unfinished product work and therefore requires `continue=true` plus a concrete, high-value `next_focus`. Missing Forge credentials, an unavailable provider, a runner failure, a deterministic product/test failure, an unreadable state file or a human-only blocker may change what can be worked on, but none of them is permission to stop the factory.
+
+The continuity supervisor runs every five minutes and guarantees that unfinished Atlas always has either an active factory or a fresh cycle queued. The watchdog performs bounded local retries for defensible Ox/provider/network/runner failures; exhausting those local retries delegates to a fresh supervisor cycle rather than stopping the product effort. Deterministic product failures are not hidden by blind retries: the next fresh cycle must repair them.
+
+`continue=false` is valid only with `release_status="MARKETPLACE_READY"`. `BLOCKED_HUMAN` still means continue autonomously on all remaining offline/technical work and re-check the blocker each cycle.
 
 ## Anti-usine-à-gaz
 
@@ -54,4 +58,8 @@ For every feature ask: **Does this directly increase the probability that an adm
 
 ## Done
 
-Parity done = real Forge-shaped V1 with real manifest, production + fixture adapters behind the same gateway, tested risk/financial logic, money-first UI, no material red-team blocker and strict parity gate passing. Live done additionally requires authenticated Forge lint/deploy/install and a real environment scan.
+Parity done = real Forge-shaped V1 with real manifest, production + fixture adapters behind the same gateway, tested risk/financial logic, money-first UI, no material red-team blocker and strict parity gate passing.
+
+Live done additionally requires authenticated Forge lint/deploy/install and a real-environment scan with spot checks of tenant context, pagination, permissions, KVS behavior and recommendation correctness.
+
+`MARKETPLACE_READY` requires the live gate to be complete, no unresolved release blocker, release/security/privacy/Marketplace packaging to be present, and all deterministic release gates green. Only then may autonomous continuation stop.
