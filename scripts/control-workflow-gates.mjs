@@ -36,6 +36,14 @@ if (factory) {
   else passes.push('factory has no blind direct cron');
   if (!factory.text.includes('install-opencode-with-retry.sh')) failures.push('factory lost resilient OpenCode installer');
   if (!factory.text.includes('run-opencode-with-retry.sh')) failures.push('factory lost resilient OpenCode execution wrapper');
+  if (!factory.text.includes('factory/continuation')) failures.push('factory lost durable integration continuation checkpoint');
+  if (!factory.text.includes('ATLAS_CONTINUATION_CHECKPOINT=RESUMED')) failures.push('builder lost checkpoint resume path');
+  if (!factory.text.includes('Persist resumable integration checkpoint')) failures.push('integrator no longer persists WIP before hard gates');
+  if (/release_status=\"LIVE_DEV_VERIFIED\"[^\n]*continue=false|PARITY_READY_AWAITING_CREDENTIALS[^\n]*continue=false/.test(factory.text)) {
+    failures.push('factory can intentionally stop before Marketplace readiness');
+  }
+  if (!factory.text.includes('npm run audit:high --if-present')) failures.push('factory host gates lack high/critical dependency audit');
+  else passes.push('factory resumes WIP and keeps unfinished state alive');
 }
 
 function hasFiveMinuteCron(entry) {
@@ -62,8 +70,9 @@ if (watchdog) {
   for (const sig of ['unexpected server error', 'endpoint is unavailable', 'upstream request failed', 'UnknownError']) {
     if (!watchdog.text.toLowerCase().includes(sig.toLowerCase())) failures.push(`watchdog lost transient signature: ${sig}`);
   }
-  if (!watchdog.text.includes('supervisor will launch a fresh cycle')) failures.push('watchdog exhaustion no longer delegates to fresh-cycle continuity');
-  else passes.push('watchdog bounded retry delegates to global continuity');
+  if (!watchdog.text.includes('ATLAS_WATCHDOG=BACKUP_CONTINUITY_DISPATCH')) failures.push('watchdog lacks independent delayed continuity fallback');
+  if (!watchdog.text.includes('dispatching fresh cycle')) failures.push('watchdog local retry exhaustion can become terminal');
+  else passes.push('watchdog has bounded retry plus independent fresh-cycle fallback');
 }
 
 if (mainCi) {
