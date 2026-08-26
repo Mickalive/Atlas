@@ -10,9 +10,12 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:backend": "tsc -p tsconfig.json --noEmit",
+    "typecheck:frontend": "tsc -p tsconfig.frontend.json --noEmit",
+    "typecheck": "npm run typecheck:backend && npm run typecheck:frontend",
     "lint": "node scripts/static-gates.mjs",
-    "build": "node scripts/static-gates.mjs && tsc -p tsconfig.json --noEmit",
+    "audit:high": "npm audit --audit-level=high",
+    "build": "node scripts/static-gates.mjs && npm run typecheck",
     "fixture:scan": "npx tsx src/dev/runFixtureScan.ts",
     "parity:local": "bash .github/scripts/forge-parity-check.sh"
   },
