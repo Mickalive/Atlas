@@ -1,31 +1,46 @@
 # Atlas 24h Factory
 
-The factory is deliberately smaller than SPIDER. It uses specialized lanes only where parallelism reduces wall-clock time or independent review reduces risk.
+Atlas uses the smallest autonomous structure that materially reduces wall-clock time or release risk.
+
+## Control plane
+
+Every OpenCode session is governed by:
+1. `ATLAS_MASTER_PROMPT.md` — human-owned constitution;
+2. root `AGENTS.md` — common operating standard;
+3. `docs/agents/AGENT_CARDS.md` — exact machine-checked role card;
+4. workflow-specific mounted handoffs.
+
+The OpenCode wrapper verifies a one-to-one mapping between `.opencode/agents/*.md` and canonical cards and restores protected control-plane files after every agent run. An autonomous product agent therefore cannot silently rewrite its own role, the master prompt, Forge parity rules or CI workflows.
 
 ## Lanes
 
-1. **API Architect** — current Atlassian/Forge feasibility, auth, scopes, rate limits and live-data truth. Produces `docs/API_FEASIBILITY.md`.
-2. **Market/Product Architect** — competitor reality, V1 cuts, UX, renewal framing and Marketplace distribution. Produces `docs/PRODUCT_V1.md`.
-3. **Security/Test Architect** — least privilege, threat model, tenant isolation, false-positive test plan and Marketplace blockers. Produces `docs/SECURITY_TEST_PLAN.md`.
-4. **Implementation Builder** — synthesizes the three lanes into the actual Forge application and automated tests.
-5. **Functional Red Team** — independently attacks correctness, especially false-positive savings and financial math.
-6. **Security Red Team** — independently attacks scopes, auth, tenancy, secret handling and unsafe remediation.
-7. **Release Integrator** — fixes material findings, runs the gates, leaves one candidate, and prepares/deploys a real Forge development build when credentials exist.
+Three independent architects run in parallel: API feasibility, market/product, security/test. One Builder owns implementation. Two independent red teams attack the same snapshot. One Release Integrator performs the only repair/integration pass.
 
-## Lifecycle
+## Continuity
 
-Research lanes run in parallel on isolated branches. Builder consumes them via worktrees. Red teams independently inspect the same build. Release Integrator consumes both audits and owns the only repair pass. A candidate reaches `main` only after local CI gates pass.
+`state/factory_direction.json` is accepted machine-readable continuation state.
 
-When Forge credentials are configured, the final gate also registers the app if necessary, runs Forge lint/deploy and optionally installs/upgrades it on the configured test site.
+`Atlas Factory Supervisor` runs after every completed main factory cycle and twice per hour as a dead-man fallback. It dispatches another cycle only when:
+- no Atlas factory run is active;
+- the last factory run succeeded;
+- `continue=true`;
+- a concrete `next_focus` exists;
+- the 24-hour anti-runaway cap has not been reached.
 
-The workflow is scheduled every three hours and is concurrency-locked: it improves the existing product instead of starting overlapping factories.
+`Atlas Ox and Runner Watchdog` also runs after failures and twice per hour. It reruns failed jobs only when logs contain defensible transient OpenCode/network/runner signatures. It never hides a deterministic product/test failure by blind repetition.
+
+The main factory retains a slower six-hour scheduled fallback and concurrency locking.
+
+## Forge parity
+
+Until credentials are connected, candidates must pass `docs/FORGE_PARITY_MODE.md` and the Node 24 / 512 MB network-isolated parity container. Once credentials exist, the final gate adds authenticated Forge lint/deploy/install and optional organization API smoke tests without changing Atlas architecture.
 
 ## Anti-usine-à-gaz rules
 
-- No agent exists only to supervise another agent.
-- Research must end in implementation constraints, not essays.
+- No agent exists merely to supervise another.
+- Research ends in implementation constraints, not essays.
 - Builder owns one coherent codebase.
-- Auditors cannot mutate the build they judge.
-- One integrator fixes, tests and chooses the candidate.
-- A lane that cannot materially improve an installable V1 must stop and document the blocker.
-- Never fabricate a live Atlassian result when credentials or APIs are absent.
+- Auditors cannot mutate the candidate they judge.
+- One Integrator fixes/tests/chooses the candidate.
+- Control-plane evolution is human-owned.
+- A new cycle must have a concrete product-relevant next focus.
