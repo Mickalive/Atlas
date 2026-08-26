@@ -1,2 +1,3 @@
 Atlas factory bootstrap marker.
-Clean handoff-safe factory cycle requested: 2026-08-26.
+Resilient non-stopping product cycle requested: 2026-08-26.
+Reason: Atlas is not MARKETPLACE_READY; continue autonomously until all technical, live and Marketplace release gates are satisfied.
