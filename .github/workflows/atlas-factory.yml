@@ -321,7 +321,7 @@ jobs:
       - name: Remove ephemeral factory inputs
         run: rm -rf .factory-inputs
       - name: Persist resumable integration checkpoint
-        if: always()
+        if: success()
         shell: bash
         run: |
           rm -rf .factory-inputs
