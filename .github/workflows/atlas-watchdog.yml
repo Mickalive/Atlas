@@ -1,0 +1,55 @@
+name: Atlas Ox and Runner Watchdog
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Atlas 24h Product Factory"]
+    types: [completed]
+  schedule:
+    - cron: '7,37 * * * *'
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: atlas-watchdog
+  cancel-in-progress: true
+
+jobs:
+  recover_transient_failures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Re-run only defensible infrastructure failures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          WF='atlas-factory.yml'
+          ACTIVE=$(gh run list --repo "$REPO" --workflow "$WF" --limit 30 --json status --jq '[.[]|select(.status!="completed")]|length' 2>/dev/null || echo 0)
+          if [[ "$ACTIVE" -gt 0 ]]; then
+            echo 'Factory active; watchdog does not interrupt it.'
+            exit 0
+          fi
+
+          LATEST=$(gh run list --repo "$REPO" --workflow "$WF" --limit 30 --json databaseId,status,conclusion,createdAt --jq '[.[]|select(.status=="completed")]|sort_by(.createdAt)|last//empty' 2>/dev/null || true)
+          [[ -n "$LATEST" ]] || exit 0
+          ID=$(jq -r '.databaseId' <<<"$LATEST")
+          CONCLUSION=$(jq -r '.conclusion // ""' <<<"$LATEST")
+          case "$CONCLUSION" in failure|timed_out|cancelled) ;; *) echo "Run $ID=$CONCLUSION; no recovery."; exit 0;; esac
+
+          set +e
+          LOGS=$(gh run view "$ID" --repo "$REPO" --log 2>&1)
+          RC=$?
+          set -e
+          [[ "$RC" -eq 0 ]] || { echo 'Unable to inspect logs; refusing blind retry.'; exit 0; }
+
+          if grep -Eiq '(ATLAS_TRANSIENT_OX_EXHAUSTED|network_error|NetworkError|network error|fetch failed|APIConnectionError|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|ETIMEDOUT|timed out|HTTP[^0-9]*(429|500|502|503|504)|rate.?limit|service unavailable|bad gateway|gateway timeout|runner has received a shutdown signal|runner service is stopped|lost communication with the runner)' <<<"$LOGS"; then
+            echo "::warning::Transient infrastructure signature found in run $ID; rerunning failed jobs."
+            gh run rerun "$ID" --repo "$REPO" --failed || gh run rerun "$ID" --repo "$REPO" || true
+          else
+            echo "Run $ID failed without defensible infrastructure evidence; watchdog refuses to mask product/test failure."
+          fi
