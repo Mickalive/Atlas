@@ -1,33 +1,41 @@
 manifestVersion: 1
-# App id (ARI) is assigned by `forge register` on first registration.
-# See docs/BUILDER_HANDOFF.md - live verification is blocked only by credentials.
+
+# Pre-registration placeholder. The live gate detects this exact sentinel and
+# runs `forge register`, which replaces it with the real app ARI.
+app:
+  id: ari:cloud:ecosystem::app/00000000-0000-0000-0000-000000000000
+  runtime:
+    name: nodejs24.x
+    memoryMB: 512
+  licensing:
+    enabled: true
 
 modules:
   jira:adminPage:
     - key: atlas-dashboard-page
-      function: atlas-dashboard-fn
+      resource: atlas-dashboard-ui
+      render: native
+      resolver:
+        function: atlas-resolver-fn
       title: Atlas - Cut My Atlassian Bill
-      useAsConfig: true
-      useAsGetStarted: true
 
   function:
-    - key: atlas-dashboard-fn
-      handler: frontend/dashboard.renderDashboard
     - key: atlas-resolver-fn
-      handler: backend/index.handler
+      handler: index.handler
     - key: atlas-scan-chunk-fn
-      handler: backend/index.scanChunkHandler
+      handler: index.scanChunkHandler
+      # Scheduled triggers default to a much shorter timeout. Atlas chunks are
+      # deliberately allowed to run up to the current Forge maximum.
+      timeoutSeconds: 900
 
-  # Exactly one scheduled trigger (feasibility section 8): resumes interrupted
-  # scans within the async-event runtime budget. The same ScanService engine
-  # powers resolver-driven chunks; there is no separate background logic.
   scheduledTrigger:
     - key: atlas-scan-resume
       function: atlas-scan-chunk-fn
-      interval: fiveMinutes
+      interval: fiveMinute
 
-licensing:
-  enabled: true
+resources:
+  - key: atlas-dashboard-ui
+    path: src/frontend/dashboard.jsx
 
 permissions:
   scopes:
@@ -45,7 +53,3 @@ permissions:
     - read:group:confluence
   # No write scopes. No admin scopes. No egress remotes in V1:
   # org-admin enrichment ships disabled and api.atlassian.com stays undeclared.
-
-runtime:
-  name: nodejs24.x
-  memoryMB: 512
