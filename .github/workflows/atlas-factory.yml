@@ -1,0 +1,283 @@
+name: Atlas 24h Product Factory
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.factory/KICKOFF'
+  schedule:
+    - cron: '23 */3 * * *'
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: atlas-product-factory
+  cancel-in-progress: false
+
+env:
+  ATLAS_MODEL: opencode/x-preview-f-free
+
+jobs:
+  api_architect:
+    name: API ARCHITECT
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - name: Prepare lane
+        run: git switch -C "factory/${GITHUB_RUN_ID}/api"
+      - name: Install OpenCode
+        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+      - name: Research current Atlassian API feasibility
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent api_architect "Produce the binding API feasibility map for the current Atlas V1. Verify current official Atlassian docs on the network; do not rely on stale memory."
+      - name: Persist lane
+        run: |
+          git config user.name atlas-api-architect
+          git config user.email atlas-api-architect@autonomous.local
+          git add -A && git commit -m "API feasibility ${GITHUB_RUN_ID}" || true
+          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/api"
+
+  product_architect:
+    name: MARKET / PRODUCT ARCHITECT
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - run: git switch -C "factory/${GITHUB_RUN_ID}/product"
+      - name: Install OpenCode
+        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+      - name: Freeze sellable V1
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent market_product_architect "Research the current Atlassian Marketplace and freeze the narrowest sellable V1. Recoup and current license optimizers are real competitors."
+      - name: Persist lane
+        run: |
+          git config user.name atlas-product-architect
+          git config user.email atlas-product-architect@autonomous.local
+          git add -A && git commit -m "Product V1 ${GITHUB_RUN_ID}" || true
+          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/product"
+
+  security_architect:
+    name: SECURITY / TEST ARCHITECT
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - run: git switch -C "factory/${GITHUB_RUN_ID}/security"
+      - name: Install OpenCode
+        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+      - name: Design adversarial safety gates
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent security_test_architect "Define the least-privilege security model and false-positive test matrix for a real Marketplace release."
+      - name: Persist lane
+        run: |
+          git config user.name atlas-security-architect
+          git config user.email atlas-security-architect@autonomous.local
+          git add -A && git commit -m "Security test plan ${GITHUB_RUN_ID}" || true
+          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/security"
+
+  builder:
+    name: IMPLEMENTATION BUILDER
+    needs: [api_architect, product_architect, security_architect]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - name: Mount research lanes
+        run: |
+          for lane in api product security; do
+            git fetch origin "factory/${GITHUB_RUN_ID}/$lane:refs/remotes/origin/factory/${GITHUB_RUN_ID}/$lane"
+            git worktree add --detach "/tmp/atlas_$lane" "origin/factory/${GITHUB_RUN_ID}/$lane"
+          done
+          git switch -C "factory/${GITHUB_RUN_ID}/build"
+      - name: Install OpenCode
+        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+      - name: Build real Forge V1
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent implementation_builder "Build the actual Atlas V1 now. API=/tmp/atlas_api/docs/API_FEASIBILITY.md Product=/tmp/atlas_product/docs/PRODUCT_V1.md Security=/tmp/atlas_security/docs/SECURITY_TEST_PLAN.md. Copy/consume those decisions as needed. Do not stop at a plan."
+      - name: Run builder tests
+        shell: bash
+        run: |
+          if [[ -f package.json ]]; then
+            npm install
+            npm test --if-present
+            npm run lint --if-present
+            npm run build --if-present
+          fi
+      - name: Persist build
+        if: always()
+        run: |
+          git config user.name atlas-builder
+          git config user.email atlas-builder@autonomous.local
+          git add -A && git commit -m "Atlas V1 build ${GITHUB_RUN_ID}" || true
+          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/build"
+
+  functional_redteam:
+    name: FUNCTIONAL RED TEAM
+    needs: [builder]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - name: Checkout build snapshot
+        run: |
+          git fetch origin "factory/${GITHUB_RUN_ID}/build:refs/remotes/origin/factory/${GITHUB_RUN_ID}/build"
+          git switch -C "factory/${GITHUB_RUN_ID}/functional-audit" "origin/factory/${GITHUB_RUN_ID}/build"
+          mkdir -p audit
+      - name: Install OpenCode
+        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+      - name: Attack correctness
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent functional_redteam "Audit this exact builder snapshot. Your only durable output is audit/FUNCTIONAL.md; do not repair the app."
+      - name: Persist audit
+        run: |
+          git reset -- . >/dev/null 2>&1 || true
+          git add audit/FUNCTIONAL.md
+          git config user.name atlas-functional-redteam
+          git config user.email atlas-functional-redteam@autonomous.local
+          git commit -m "Functional audit ${GITHUB_RUN_ID}" || true
+          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/functional-audit"
+
+  security_redteam:
+    name: SECURITY RED TEAM
+    needs: [builder, security_architect]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - name: Checkout build and mount security plan
+        run: |
+          git fetch origin "factory/${GITHUB_RUN_ID}/build:refs/remotes/origin/factory/${GITHUB_RUN_ID}/build"
+          git switch -C "factory/${GITHUB_RUN_ID}/security-audit" "origin/factory/${GITHUB_RUN_ID}/build"
+          git fetch origin "factory/${GITHUB_RUN_ID}/security:refs/remotes/origin/factory/${GITHUB_RUN_ID}/security"
+          git worktree add --detach /tmp/atlas_security_plan "origin/factory/${GITHUB_RUN_ID}/security"
+          mkdir -p audit
+      - name: Install OpenCode
+        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+      - name: Attack security and Marketplace readiness
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent security_redteam "Audit this exact builder snapshot. Security plan=/tmp/atlas_security_plan/docs/SECURITY_TEST_PLAN.md. Durable output only audit/SECURITY.md; do not repair the app."
+      - name: Persist audit
+        run: |
+          git reset -- . >/dev/null 2>&1 || true
+          git add audit/SECURITY.md
+          git config user.name atlas-security-redteam
+          git config user.email atlas-security-redteam@autonomous.local
+          git commit -m "Security audit ${GITHUB_RUN_ID}" || true
+          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/security-audit"
+
+  integrator:
+    name: RELEASE INTEGRATOR
+    needs: [functional_redteam, security_redteam]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - name: Checkout build and mount audits
+        run: |
+          git fetch origin "factory/${GITHUB_RUN_ID}/build:refs/remotes/origin/factory/${GITHUB_RUN_ID}/build"
+          git switch -C "factory/${GITHUB_RUN_ID}/candidate" "origin/factory/${GITHUB_RUN_ID}/build"
+          for lane in functional-audit security-audit; do
+            git fetch origin "factory/${GITHUB_RUN_ID}/$lane:refs/remotes/origin/factory/${GITHUB_RUN_ID}/$lane"
+            git worktree add --detach "/tmp/atlas_$lane" "origin/factory/${GITHUB_RUN_ID}/$lane"
+          done
+      - name: Install OpenCode
+        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+      - name: Repair and integrate
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent release_integrator "Repair the build using /tmp/atlas_functional-audit/audit/FUNCTIONAL.md and /tmp/atlas_security-audit/audit/SECURITY.md. Produce one release candidate and docs/RELEASE_STATUS.md."
+      - name: Hard local gate
+        shell: bash
+        run: |
+          test -f manifest.yml || { echo '::error::Missing Forge manifest'; exit 1; }
+          test -f package.json || { echo '::error::Missing package.json'; exit 1; }
+          npm install
+          npm test --if-present
+          npm run lint --if-present
+          npm run build --if-present
+      - name: Persist candidate
+        run: |
+          git config user.name atlas-release-integrator
+          git config user.email atlas-release-integrator@autonomous.local
+          git add -A && git commit -m "Release candidate ${GITHUB_RUN_ID}" || true
+          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/candidate"
+
+  forge_release_gate:
+    name: FORGE LIVE GATE + MAIN
+    needs: [integrator]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      FORGE_EMAIL: ${{ secrets.FORGE_EMAIL }}
+      FORGE_API_TOKEN: ${{ secrets.FORGE_API_TOKEN }}
+      FORGE_DEVELOPER_SPACE_ID: ${{ secrets.FORGE_DEVELOPER_SPACE_ID }}
+      ATLASSIAN_SITE: ${{ secrets.ATLASSIAN_SITE }}
+      ATLASSIAN_ORG_ID: ${{ secrets.ATLASSIAN_ORG_ID }}
+      ATLASSIAN_ORG_API_KEY: ${{ secrets.ATLASSIAN_ORG_API_KEY }}
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: 0 }
+      - name: Checkout candidate
+        run: |
+          git fetch origin "factory/${GITHUB_RUN_ID}/candidate:refs/remotes/origin/factory/${GITHUB_RUN_ID}/candidate"
+          git switch -C release "origin/factory/${GITHUB_RUN_ID}/candidate"
+      - name: Re-run local gates
+        run: |
+          npm install
+          npm test --if-present
+          npm run lint --if-present
+          npm run build --if-present
+      - name: Forge registration, deploy and install when configured
+        shell: bash
+        run: |
+          if [[ -z "$FORGE_EMAIL" || -z "$FORGE_API_TOKEN" ]]; then
+            echo 'FORGE_LIVE_GATE=SKIPPED_MISSING_FORGE_CREDENTIALS'
+            exit 0
+          fi
+
+          npm install -g @forge/cli@latest
+          forge whoami
+
+          if grep -Eq 'ari:cloud:ecosystem::app/0{8}-0{4}-0{4}-0{4}-0{12}|ATLAS_PLACEHOLDER' manifest.yml; then
+            if [[ -z "$FORGE_DEVELOPER_SPACE_ID" ]]; then
+              echo '::error::Forge app is unregistered and FORGE_DEVELOPER_SPACE_ID is missing.'
+              exit 1
+            fi
+            forge register --developer-space-id "$FORGE_DEVELOPER_SPACE_ID" --accept-terms 'Cut My Atlassian Bill'
+          fi
+
+          forge lint
+          forge deploy -e development --non-interactive
+
+          if [[ -n "$ATLASSIAN_SITE" ]]; then
+            forge install --site "$ATLASSIAN_SITE" --product Jira -e development --upgrade all --confirm-scopes --non-interactive
+          else
+            echo 'FORGE_INSTALL=SKIPPED_MISSING_ATLASSIAN_SITE'
+          fi
+
+      - name: Optional live Organizations API smoke test
+        shell: bash
+        run: |
+          if [[ -z "$ATLASSIAN_ORG_ID" || -z "$ATLASSIAN_ORG_API_KEY" ]]; then
+            echo 'ORG_API_SMOKE=SKIPPED_MISSING_ORG_CREDENTIALS'
+            exit 0
+          fi
+          code=$(curl -sS -o /tmp/org-users.json -w '%{http_code}' \
+            -H "Authorization: Bearer $ATLASSIAN_ORG_API_KEY" \
+            -H 'Accept: application/json' \
+            "https://api.atlassian.com/admin/v1/orgs/$ATLASSIAN_ORG_ID/users")
+          test "$code" = '200' || { echo "::error::Organizations API smoke failed HTTP $code"; cat /tmp/org-users.json; exit 1; }
+          node -e "const x=require('/tmp/org-users.json'); if(!Array.isArray(x.data)) process.exit(1); console.log('ORG_API_USERS='+x.data.length)"
+      - name: Commit Forge registration if manifest changed
+        run: |
+          git config user.name atlas-forge-release
+          git config user.email atlas-forge-release@autonomous.local
+          git add manifest.yml docs/RELEASE_STATUS.md 2>/dev/null || true
+          git commit -m "Forge live gate ${GITHUB_RUN_ID}" || true
+      - name: Promote verified candidate to main
+        run: |
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
