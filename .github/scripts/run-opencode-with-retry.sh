@@ -3,12 +3,15 @@ set -uo pipefail
 
 REAL="${OPENCODE_BIN:-$HOME/.opencode/bin/opencode}"
 MAX_ATTEMPTS="${OPENCODE_MAX_ATTEMPTS:-3}"
-RETRY_DELAY="${OPENCODE_RETRY_DELAY_SECONDS:-120}"
+RETRY_DELAY="${OPENCODE_RETRY_DELAY_SECONDS:-60}"
 LOG="$(mktemp)"
 START_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
 trap 'rm -f "$LOG"' EXIT
 
-NETWORK_RE='(network_error|NetworkError|network error|fetch failed|APIConnectionError|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|ETIMEDOUT|timed out|socket hang up|HTTP[^0-9]*(429|500|502|503|504)|rate.?limit|service unavailable|bad gateway|gateway timeout|temporar(y|ily) unavailable|runner has received a shutdown signal|lost communication with the runner)'
+# Provider/network failures seen in real Atlas runs must be classified as
+# transient. Keep this intentionally specific: product/test failures must not
+# be hidden behind infrastructure retries.
+TRANSIENT_RE='(ATLAS_TRANSIENT_OX_|network_error|NetworkError|network error|fetch failed|APIConnectionError|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|ETIMEDOUT|timed out|socket hang up|HTTP[^0-9]*(429|500|502|503|504)|rate.?limit|service unavailable|bad gateway|gateway timeout|temporar(y|ily) unavailable|upstream request failed|endpoint is unavailable|unexpected server error|internal server error|provider[^\n]*(unavailable|overloaded|capacity)|server[^\n]*overloaded|try again later|UnknownError|err_[A-Za-z0-9]+|runner has received a shutdown signal|runner service is stopped|lost communication with the runner)'
 
 CONTROL_PATHS=(ATLAS_MASTER_PROMPT.md AGENTS.md PRODUCT_CONTRACT.md docs/FORGE_PARITY_MODE.md docs/agents/AGENT_CARDS.md .opencode/agents .github/workflows .github/scripts)
 
@@ -65,10 +68,15 @@ while (( attempt <= MAX_ATTEMPTS )); do
 
   restore_control_plane
 
-  if [[ "$rc" -eq 0 ]]; then exit 0; fi
-  if grep -Eiq "$NETWORK_RE" "$LOG"; then
+  if [[ "$rc" -eq 0 ]]; then
+    echo "ATLAS_OPENCODE_OK attempt=$attempt"
+    exit 0
+  fi
+
+  if grep -Eiq "$TRANSIENT_RE" "$LOG"; then
+    echo "ATLAS_TRANSIENT_OX_DETECTED attempt=$attempt rc=$rc" >&2
     if (( attempt < MAX_ATTEMPTS )); then
-      echo "::warning::Transient OpenCode/network/runner failure; retrying."
+      echo "::warning::Transient OpenCode/provider/network failure; retrying after ${RETRY_DELAY}s."
       sleep "$RETRY_DELAY"
       attempt=$((attempt + 1))
       continue
@@ -76,7 +84,9 @@ while (( attempt <= MAX_ATTEMPTS )); do
     echo 'ATLAS_TRANSIENT_OX_EXHAUSTED' >&2
     exit 75
   fi
-  echo "::error::OpenCode failed rc=$rc"
+
+  echo "::error::OpenCode failed with a non-transient signature rc=$rc"
   exit "$rc"
 done
+
 exit 75
