@@ -64,6 +64,70 @@ for (const allowed of SCOPE_ALLOWLIST) {
 }
 ok.push(`GATE-2: manifest scope set equals verified budget (${declaredScopes.length} scopes)`);
 
+// --- GATE-2 usage proof (SEC-H1) -------------------------------------------
+// Set equality alone cannot detect a declared-but-never-exercised scope: a
+// probe added one scope string in three documentation locations and stayed
+// green. Each manifest scope must therefore map to a SCOPE_BUDGET entry whose
+// `calls` include at least one name that appears as an actual call site in a
+// transport implementation. A scope exercised by no real call fails here.
+
+function extractScopeBudgetCalls(source) {
+  const block = source.match(/export const SCOPE_BUDGET[\s\S]*?= \{([\s\S]*?)\n\};/);
+  if (!block) return null;
+  const calls = {};
+  // Entries may be single-line or multi-line; bodies contain no nested braces.
+  const entryRe = /'([^']+)':\s*\{([^{}]*)\}/g;
+  let m;
+  while ((m = entryRe.exec(block[1])) !== null) {
+    const scope = m[1];
+    const body = m[2];
+    const callsMatch = body.match(/calls:\s*\[([^\]]*)\]/);
+    if (!callsMatch) continue;
+    calls[scope] = callsMatch[1]
+      .split(',')
+      .map((s) => s.trim().replaceAll("'", ''))
+      .filter((s) => s.length > 0);
+  }
+  return calls;
+}
+
+let budgetCalls = null;
+try {
+  const typesSource = readFileSync(join(ROOT, 'src', 'gateway', 'types.ts'), 'utf8');
+  budgetCalls = extractScopeBudgetCalls(typesSource);
+} catch {
+  fail.push('GATE-2/SEC-H1: could not read src/gateway/types.ts for scope-budget usage analysis');
+}
+
+if (budgetCalls !== null) {
+  const transportSources = ['src/gateway/forge/forgeGateway.ts', 'src/gateway/fixture/fixtureGateway.ts']
+    .map((p) => readFileSync(join(ROOT, p), 'utf8'))
+    .join('\n');
+  for (const scope of declaredScopes) {
+    const exercisedBy = budgetCalls[scope];
+    if (!exercisedBy || exercisedBy.length === 0) {
+      fail.push(`GATE-2/SEC-H1: manifest scope '${scope}' has no SCOPE_BUDGET entry with exercising calls`);
+      continue;
+    }
+    const anyCallSite = exercisedBy.some((name) =>
+      new RegExp(`\\b${name}\\s*\\(`).test(transportSources),
+    );
+    if (!anyCallSite) {
+      fail.push(
+        `GATE-2/SEC-H1: scope '${scope}' declares exercising call(s) [${exercisedBy.join(', ')}] but none exist in any transport implementation`,
+      );
+    }
+  }
+  for (const scope of Object.keys(budgetCalls)) {
+    if (!declaredScopes.includes(scope)) {
+      fail.push(`GATE-2/SEC-H1: SCOPE_BUDGET exercises '${scope}' but the manifest does not declare it`);
+    }
+  }
+  if (!fail.some((f) => f.startsWith('GATE-2/SEC-H1'))) {
+    ok.push('GATE-2/SEC-H1: every manifest scope is exercised by a real gateway call site');
+  }
+}
+
 const runtimeName = manifest?.runtime?.name;
 if (runtimeName !== 'nodejs24.x') fail.push(`parity: runtime must be nodejs24.x (got ${runtimeName})`);
 else ok.push('parity: runtime nodejs24.x');

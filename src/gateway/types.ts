@@ -64,7 +64,7 @@ export interface WireUser {
   displayName: string | null;
   /** Platform deactivated flag; null means not provided. */
   active: boolean | null;
-  /** Lowercased local-part@domain hint used ONLY by service-account heuristics. */
+  /** Lowercased LOCAL PART only, used exclusively by service-account heuristics; full addresses are never stored (SEC-3/SEC-L2). */
   emailHint: string | null;
   accountType: string | null;
   createdDate: string | null;
@@ -205,8 +205,6 @@ export interface AtlassianGateway {
   listJiraUsers(cursor: PageCursor): Promise<GatewayPage<WireUser>>;
   listGroups(cursor: PageCursor): Promise<GatewayPage<WireGroup>>;
   listGroupMembers(groupId: string, cursor: PageCursor): Promise<GatewayPage<WireUser>>;
-  /** Groups a specific account belongs to (redundant-access detection). */
-  listUserGroups(accountId: string): Promise<GatewayOutcome<WireGroup[]>>;
 
   // --- Confluence ---
   listConfluenceGroups(cursor: PageCursor): Promise<GatewayPage<WireGroup>>;
@@ -236,7 +234,6 @@ export const ENDPOINTS = {
   jiraUsers: '/rest/api/3/users',
   jiraGroupsBulk: '/rest/api/3/group/bulk',
   jiraGroupMember: '/rest/api/3/group/member',
-  jiraUserGroups: '/rest/api/3/user/groups',
   jiraSearchJql: '/rest/api/3/search/jql',
   confluenceGroups: '/wiki/rest/api/group',
   confluenceGroupMembers: '/wiki/rest/api/group/{groupId}/member',
@@ -244,15 +241,35 @@ export const ENDPOINTS = {
   orgUsers: '/admin/v1/orgs/{orgId}/users',
 } as const;
 
-/** Scope budget: every manifest scope must appear here AND be exercised by a named call (GATE-2). */
-export const SCOPE_BUDGET: Record<string, { exercisedBy: string }> = {
-  'read:license:jira': { exercisedBy: 'getInstanceLicensePlans/getApproximateLicenseCount' },
-  'read:application-role:jira': { exercisedBy: 'listJiraApplicationRoles' },
-  'read:user:jira': { exercisedBy: 'listJiraUsers/listGroupMembers/listUserGroups/searchIssueActivity' },
-  'read:group:jira': { exercisedBy: 'listGroups/listGroupMembers' },
-  'read:avatar:jira': { exercisedBy: 'listJiraUsers/listGroupMembers (avatar subfields tolerated)' },
-  'read:jira-work': { exercisedBy: 'searchIssueActivity — see docs/API_FEASIBILITY_ADDENDUM.md (VERIFY-LIVE)' },
-  'read:content-details:confluence': { exercisedBy: 'searchConfluenceContributions' },
-  'read:user:confluence': { exercisedBy: 'listConfluenceGroupMembers' },
-  'read:group:confluence': { exercisedBy: 'listConfluenceGroups/listConfluenceGroupMembers' },
-};
+/**
+ * Scope budget: every manifest scope must appear here AND be exercised by at
+ * least one named gateway call THAT ACTUALLY EXISTS in a transport
+ * implementation (GATE-2, hardened per SEC-H1: scripts/static-gates.mjs
+ * extracts `calls` from this file and greps the gateway sources for real call
+ * sites — a scope with no exercising call fails the gate; set equality alone
+ * proves nothing).
+ *
+ * `justified` scopes have an endpoint-level basis recorded in
+ * docs/API_FEASIBILITY_ADDENDUM.md even though no Atlas code consumes the
+ * specific subfields (e.g. avatar): the endpoint is exercised and current
+ * feasibility documentation lists the scope among its requirements.
+ * VERIFY-LIVE: drop any justified-but-unconsumed scope if live evidence shows
+ * the endpoint serves without it.
+ */
+export const SCOPE_BUDGET: Record<string, { calls: string[]; justified?: string }> = {
+  'read:license:jira': { calls: ['getInstanceLicensePlans', 'getApproximateLicenseCount'] },
+  'read:application-role:jira': { calls: ['listJiraApplicationRoles'] },
+  'read:user:jira': { calls: ['listJiraUsers', 'listGroupMembers', 'searchIssueActivity'] },
+  'read:group:jira': { calls: ['listGroups', 'listGroupMembers'] },
+  'read:avatar:jira': {
+    calls: ['listJiraUsers', 'listGroupMembers'],
+    justified: 'feasibility endpoint table lists this scope for /rest/api/3/users and /rest/api/3/group/member; see addendum A7 (VERIFY-LIVE: drop if served without it)',
+  },
+  'read:jira-work': {
+    calls: ['searchIssueActivity'],
+    justified: 'recorded deviation A1 — exact accepted scope string VERIFY-LIVE',
+  },
+  'read:content-details:confluence': { calls: ['searchConfluenceContributions'] },
+  'read:user:confluence': { calls: ['listConfluenceGroupMembers'] },
+  'read:group:confluence': { calls: ['listConfluenceGroups', 'listConfluenceGroupMembers'] },
+};;

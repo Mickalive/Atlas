@@ -13,7 +13,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "node scripts/static-gates.mjs",
     "build": "node scripts/static-gates.mjs && tsc -p tsconfig.json --noEmit",
-    "fixture:scan": "node --experimental-strip-types src/dev/runFixtureScan.ts",
+    "fixture:scan": "npx tsx src/dev/runFixtureScan.ts",
     "parity:local": "bash .github/scripts/forge-parity-check.sh"
   },
   "dependencies": {

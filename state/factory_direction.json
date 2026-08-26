@@ -1,7 +1,7 @@
 {
-  "release_status": "BUILDING",
-  "continue": true,
-  "reason": "Initial autonomous Forge-parity build is not yet accepted.",
-  "next_focus": "Build and adversarially validate the narrow money-first Forge V1.",
-  "updated_at": "2026-08-26T02:15:00Z"
+  "release_status": "PARITY_READY_AWAITING_CREDENTIALS",
+  "continue": false,
+  "reason": "Single repair/integration pass complete over snapshot 40ffe57 using both independent audits. Both functional BLOCKERs, all functional HIGHs (3-5), security HIGHs (SEC-H1, SEC-H2) and the cheap MEDIUM/LOW set are fixed with 30 new regression tests (127 total). Host gates green: lint (incl. usage-based GATE-2/SEC-H1), typecheck, 127/127 tests, fixture CLI reproduces baseline hero $722 ($309/$412); Forge parity container PASS (Node 24 / 512MB / network=none). No material blocker remains in parity mode; only real Atlassian credentials/live verification are missing. Residual UNKNOWNs (live pagination shapes, scope strings, KVS concurrency semantics, resolver auth) are catalogued in docs/RELEASE_STATUS.md section 5.",
+  "next_focus": "On credential arrival: forge register to fill the manifest app id, run authenticated forge lint/deploy/install, then execute the VERIFY-LIVE checklist in docs/RELEASE_STATUS.md section 5 top-down (scope strings incl. read:avatar:jira drop-condition A7 and read:jira-work deviation A1; users-endpoint pagination shape; asApp acceptance; tenant-context field pinning SEC-M4; non-admin resolver probe SEC-M5; KVS concurrency observation for the lease residual; one real-environment scan).",
+  "updated_at": "2026-08-26T08:05:00Z"
 }

@@ -170,6 +170,14 @@ export interface Recommendation {
   accountId: string;
   displayName: string | null;
   products: ProductId[];
+  /**
+   * Products where activity/inactivity was actually MEASURED for this
+   * account (positive observations or drained negative sweeps). Products
+   * listed in `products` but absent here ride along on the account-level
+   * classification without product-specific evidence and are labeled as such
+   * in the WHAT line (functional MEDIUM 7).
+   */
+  productsMeasured: ProductId[];
   accessPaths: string[];
   what: string;
   why: {

@@ -87,3 +87,50 @@ Implemented literally:
 Written by `implementation_builder` on 2026-08-26 from the mounted handoffs.
 No feasibility verdict was weakened: every UNKNOWN/DEGRADED/BLOCKED row is
 preserved in code as UNKNOWN/DEGRADED behavior with tests enforcing it.
+
+---
+
+# Release Integrator additions (2026-08-26 repair pass)
+
+## A7. `read:avatar:jira` endpoint-level justification (SEC-H1 resolution)
+
+- **Status:** KEPT, with recorded basis and a live drop-condition.
+- **Basis:** `.factory-inputs/API_FEASIBILITY.md` (endpoint table) lists
+  `read:avatar:jira` among the current requirements of BOTH endpoints Atlas
+  actually calls for seat inventory: `/rest/api/3/users` and
+  `/rest/api/3/group/member`. Atlas consumes none of the avatar subfields;
+  they are tolerated-null in the shared adapters (`parseWireUserItem`).
+- **Enforcement:** GATE-2 is now usage-based
+  (`scripts/static-gates.mjs`, hardened per SECURITY.md SEC-H1): every
+  manifest scope must map to a `SCOPE_BUDGET` entry whose named call exists
+  as a real call site in a transport implementation. A declared scope with no
+  exercising call fails the build. `read:avatar:jira` is budgeted against
+  `listJiraUsers`/`listGroupMembers` with this entry as its written
+  justification.
+- **VERIFY-LIVE drop-condition:** on first authenticated install, confirm
+  whether both endpoints serve without `read:avatar:jira`. If they do,
+  REMOVE the scope from manifest, allowlist, and budget in the same pass
+  (least privilege wins; zero-consumption scopes are dropped per SEC-2(2)).
+  Until then treat unexercised-subfield drift as reachable and re-check at
+  each audit cycle, exactly as the security audit directed.
+
+## A8. GATE-2 hardening record (SEC-H1)
+
+The gate previously proved only set equality between manifest and a
+builder-owned allowlist; the security audit empirically shipped a
+declared-but-zero-use scope through it green. It now also extracts
+`SCOPE_BUDGET[scope].calls` from `src/gateway/types.ts` and requires at least
+one call site to exist in `src/gateway/forge/forgeGateway.ts` or
+`src/gateway/fixture/fixtureGateway.ts`. Verified: the audit's exact probe
+(add `read:audit-log:jira` to manifest + allowlist + budget) now FAILS with
+`GATE-2/SEC-H1: ... none exist in any transport implementation`.
+
+## A9. Production transport defect found during repair (live-shape parity)
+
+Feeding RAW HTTP-shaped payloads through `ForgeAtlassianGateway` (the test
+class FUNCTIONAL.md demanded) exposed an additional pre-repair defect no
+fixture/replay test could see: `listConfluenceGroupMembers` passed the
+substituted path as the telemetry `endpoint` argument and requested the
+LITERAL `{groupId}` template path in production. Fixed; regression coverage
+in `test/live-shape-parity.test.ts`. Recorded here because it changes what
+first live verification will exercise.

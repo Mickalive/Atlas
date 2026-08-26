@@ -100,6 +100,10 @@ resolver.define('rescan', async ({ context }: { context: ForgeInvocationContext 
     current.status = 'QUEUED';
     current.report = null;
     current.phase = 'queued';
+    // Admin-initiated reset overrides any stale lease from a previous
+    // invocation (SEC-H2); the fresh chunk re-acquires its own lease.
+    current.leaseUntilEpochMs = null;
+    current.leaseOwnerToken = null;
   }
   await service.ensureScan();
   await service.runChunk(RESOLVER_CHUNK_BUDGET_MS);

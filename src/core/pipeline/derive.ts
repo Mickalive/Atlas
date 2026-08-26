@@ -36,7 +36,7 @@ import type { NormalizedUser } from '../normalize/normalize';
 import {
   buildPerUserActivity,
   buildUserProductEvidence,
-  orgSignalsForAccount,
+  mergedOrgLastActiveForProduct,
   type EvidenceWindow,
 } from '../evidence/evidence';
 import {
@@ -273,11 +273,9 @@ export function deriveReport(snap: AcquisitionSnapshot, options?: DeriveOptions)
     const evidenceMap = new Map<ProductId, UserProductEvidence>();
     for (const seat of a.seats) {
       const orgUser = snap.orgUsersById?.get(a.user.accountId) ?? null;
-      const orgSignals = orgSignalsForAccount(orgUser).filter(
-        (s) => s.productId === null || s.productId === seat.productId,
-      );
-      const orgLastActive =
-        orgSignals.filter((s) => s.kind === 'ORG_LAST_ACTIVE').map((s) => s.lastObservedAt)[0] ?? null;
+      // Org-wide and product-specific last-active merged by MAX recency per
+      // product — never positional selection (functional BLOCKER 2).
+      const orgLastActive = mergedOrgLastActiveForProduct(orgUser, seat.productId);
 
       let unavailableReason: string | null = null;
       if (activity.malformedActivityAccounts.has(a.user.accountId)) {
@@ -285,9 +283,14 @@ export function deriveReport(snap: AcquisitionSnapshot, options?: DeriveOptions)
       } else if (
         seat.productId === 'jira' &&
         !activity.jiraSweepComplete &&
-        snap.issueActivityDegradedReason &&
-        !aHasPositive(activity.byAccount.get(a.user.accountId), seat.productId)
+        snap.issueActivityDegradedReason
       ) {
+        // Degraded/undrained Jira sweep: EVERY jira seat loses decision-grade
+        // coverage, including seats with prefix hits — the undrained remainder
+        // may hide recent activity that would force KEEP (functional HIGH 3).
+        // Genuinely recent users still reach KEEP earlier via the
+        // conflicting-recent-signal screen, which runs before this degrades
+        // anything; what is removed is SAFE_NOW-from-stale-prefix.
         unavailableReason = `jira activity stream degraded: ${snap.issueActivityDegradedReason}`;
       } else if (seat.productId === 'confluence' && !snap.confluenceContributions.has(a.user.accountId)) {
         unavailableReason = 'confluence contribution query not performed (outside bounded candidate set or stream unavailable)';
@@ -408,10 +411,16 @@ export function deriveReport(snap: AcquisitionSnapshot, options?: DeriveOptions)
     effectiveDates.add('2026-08-26');
   }
 
+  // Totals count the ANALYSIS POPULATION, not the emitted card list: KEEP/
+  // UNKNOWN emission is capped, and recounting from capped cards understated
+  // collapsed counts (functional HIGH 4). Money pools are still exact sums
+  // over emitted recommendations — SAFE_NOW/REVIEW always emit.
   const totals = computeTotals({
     recommendations,
     deactivatedExcludedCount: deactivatedCount,
     protectedExcludedFromSafeNow: protectedStuckAtReview,
+    populationKeepCount: keepCount,
+    populationUnknownCount: unknownCount,
   });
 
   return {
@@ -460,9 +469,3 @@ export function deriveReport(snap: AcquisitionSnapshot, options?: DeriveOptions)
   };
 }
 
-function aHasPositive(
-  perProduct: Map<ProductId, { lastIso: string }> | undefined,
-  productId: ProductId,
-): boolean {
-  return perProduct?.has(productId as ProductId) ?? false;
-}

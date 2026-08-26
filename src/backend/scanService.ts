@@ -125,6 +125,13 @@ interface StreamProgress {
   reason: string | null;
   itemsFetched: number;
   pagesFetched: number;
+  /**
+   * Fingerprint of the previous page's first item — loop protection for
+   * responders that ignore offset probes (functional HIGH 5): an unverifiable
+   * pagination continuation must degrade the stream, never spin or silently
+   * report COMPLETE over a repeated window.
+   */
+  lastPageFingerprint: string | null;
 }
 
 interface MembershipRow {
@@ -152,7 +159,14 @@ export interface ScanRecord {
   pendingContributionAccountIds: string[] | null;
   streams: Record<string, StreamProgress>;
   report: FinalReport | null;
+  /**
+   * Best-effort concurrency lease (SEC-H2): a chunk advances the shared
+   * persisted record only while it holds the lease. Without CAS-backed KVS
+   * this narrows — but cannot fully eliminate — interleaving windows; see
+   * docs/RELEASE_STATUS.md residual-risk notes.
+   */
   leaseUntilEpochMs: number | null;
+  leaseOwnerToken: string | null;
 }
 
 export const STREAM_IDS = [
@@ -169,7 +183,7 @@ export const STREAM_IDS = [
 
 function freshRecord(scanId: string, dataMode: DataMode, nowIso: string): ScanRecord {
   const streams: Record<string, StreamProgress> = {};
-  for (const id of STREAM_IDS) streams[id] = { state: 'PENDING', reason: null, itemsFetched: 0, pagesFetched: 0 };
+  for (const id of STREAM_IDS) streams[id] = { state: 'PENDING', reason: null, itemsFetched: 0, pagesFetched: 0, lastPageFingerprint: null };
   return {
     scanId,
     dataMode,
@@ -184,6 +198,7 @@ function freshRecord(scanId: string, dataMode: DataMode, nowIso: string): ScanRe
     streams,
     report: null,
     leaseUntilEpochMs: null,
+    leaseOwnerToken: null,
   };
 }
 
@@ -202,6 +217,12 @@ function nextPageCursor(current: PageCursor, meta: PageMeta): PageCursor {
   if (meta.nextCursor) return { cursor: meta.nextCursor };
   if (meta.nextHref) return { cursor: meta.nextHref };
   if (typeof meta.startAt === 'number' && meta.pageSize > 0 && meta.isLast === false) {
+    return { startAt: (current.startAt ?? 0) + meta.pageSize, pageLimit: meta.pageSize };
+  }
+  if (meta.isLast === null && meta.pageSize > 0) {
+    // Unknown continuation: allow ONE offset probe forward. Loop protection
+    // lives in drainVerdict's repeat-fingerprint check — if the responder
+    // ignored the probe the stream degrades instead of spinning.
     return { startAt: (current.startAt ?? 0) + meta.pageSize, pageLimit: meta.pageSize };
   }
   return {};
@@ -240,25 +261,120 @@ function extractStatus(err: unknown): number | null {
 }
 
 /**
+ * Drain verdicts for one fetched page (functional HIGH 5):
+ *  - 'more':     the responder explicitly says a continuation exists, OR a
+ *                forward probe can be constructed for an unverifiable state.
+ *  - 'drained':  termination is EVIDENCED (explicit last flag, empty page,
+ *                or short page against the requested size).
+ *  - 'undrained': continuation could NOT be verified. The stream degrades and
+ *                downstream evidence is forced UNKNOWN — an unverifiable
+ *                continuation must never present as COMPLETE.
+ *
+ * Pure, so the shared advanceOnePage AND the multi-group member loops apply
+ * identical semantics. Fixture responders always set explicit flags and are
+ * unaffected; production responders omitting every pagination signal hit the
+ * strict unknown path: unknown continuation defaults to INCOMPLETE, never to
+ * complete.
+ */
+type DrainVerdict = 'drained' | 'more' | 'undrained';
+
+export const UNDRAINED_REPEAT_REASON =
+  'pagination continuation unverifiable: responder repeats the same page; coverage may be incomplete';
+export const UNDRAINED_NO_PROBE_REASON =
+  'pagination continuation unverifiable: responder provided no usable continuation fields; coverage may be incomplete';
+
+function firstItemKey(values: unknown[]): string {
+  return values.length > 0 ? JSON.stringify(values[0]) : '';
+}
+
+function drainVerdict(
+  meta: PageMeta,
+  values: unknown[],
+  requestedLimit: number,
+  previousFingerprint: string | null,
+): { verdict: DrainVerdict; fingerprint: string | null; undrainedReason: string | null } {
+  if (meta.isLast === false) {
+    return { verdict: 'more', fingerprint: null, undrainedReason: null };
+  }
+  if (meta.isLast === true) {
+    return { verdict: 'drained', fingerprint: null, undrainedReason: null };
+  }
+  // Continuation state unknown: the responder omitted every pagination signal.
+  if (values.length === 0) {
+    // Nothing at this position: definitive end under offset semantics.
+    return { verdict: 'drained', fingerprint: null, undrainedReason: null };
+  }
+  if (requestedLimit > 0 && values.length < requestedLimit) {
+    // Short page against the requested size: responder exhausted its set.
+    return { verdict: 'drained', fingerprint: null, undrainedReason: null };
+  }
+  // Full page without continuation info: probe forward once more. A repeated
+  // first-item fingerprint proves the responder ignored the probe.
+  const fp = `item:${firstItemKey(values)}`;
+  if (previousFingerprint !== null && previousFingerprint === fp) {
+    return { verdict: 'undrained', fingerprint: null, undrainedReason: UNDRAINED_REPEAT_REASON };
+  }
+  return { verdict: 'more', fingerprint: fp, undrainedReason: null };
+}
+
+/**
+ * Apply drainVerdict to one fetched page for `streamId`, updating counters and
+ * the persisted stream progress. Call BEFORE advancing rec.cursor; the verdict
+ * is a property of the response plus the request we just made. On 'undrained'
+ * the stream reason is set and callers must degrade the stream (never OK).
+ */
+function applyPageOutcome<T>(
+  rec: ScanRecord,
+  streamId: string,
+  page: { values: T[]; meta: PageMeta },
+  requestedLimit: number,
+  sentOffset: boolean,
+): DrainVerdict {
+  const sp = rec.streams[streamId];
+  sp.pagesFetched += 1;
+  sp.itemsFetched += page.values.length;
+  const previousFingerprint = sp.lastPageFingerprint;
+  const v = drainVerdict(page.meta, page.values as unknown[], requestedLimit, previousFingerprint);
+  if (v.verdict === 'undrained') {
+    sp.reason = v.undrainedReason;
+    sp.lastPageFingerprint = null;
+    return 'undrained';
+  }
+  const continuationConstructible =
+    Boolean(page.meta.nextCursor) ||
+    Boolean(page.meta.nextHref) ||
+    typeof page.meta.startAt === 'number' ||
+    sentOffset;
+  if (v.verdict === 'more' && !continuationConstructible && page.meta.isLast !== false) {
+    // Wanted to probe but no continuation of any kind is constructible
+    // (cursor-based protocol that returned neither token nor href).
+    sp.reason = UNDRAINED_NO_PROBE_REASON;
+    sp.lastPageFingerprint = null;
+    return 'undrained';
+  }
+  sp.lastPageFingerprint = v.fingerprint;
+  return v.verdict;
+}
+
+/**
  * Advance one paginated stream by exactly one page per call so any budget
- * stays bounded. Returns 'drained' when finished, 'more' otherwise.
+ * stays bounded. Returns 'drained' when finished with evidence, 'more' while a
+ * (verified or probe-able) continuation exists, 'undrained' when the responder
+ * leaves termination unverifiable.
  */
 async function advanceOnePage<T>(
   rec: ScanRecord,
   streamId: string,
   fetchPage: (cursor: PageCursor) => Promise<{ values: T[]; meta: PageMeta }>,
   sinkItems: T[],
-): Promise<'drained' | 'more'> {
+): Promise<DrainVerdict> {
+  const requestedLimit = rec.cursor.pageLimit ?? 50;
+  const sentOffset = typeof rec.cursor.startAt === 'number';
   const page = await fetchPage(rec.cursor);
-  rec.cursor = nextPageCursor(rec.cursor, page.meta);
-  const sp = rec.streams[streamId];
-  sp.pagesFetched += 1;
-  sp.itemsFetched += page.values.length;
   sinkItems.push(...page.values);
-  // End when the API says so OR the responder returned a short page
-  // (feasibility rule: honor returned sizes and stop conditions).
-  const drainedByShortPage = page.meta.isLast !== false && page.values.length < Math.max(1, rec.cursor.pageLimit ?? Number.MAX_SAFE_INTEGER);
-  return page.meta.isLast === false ? 'more' : drainedByShortPage ? 'drained' : 'drained';
+  const verdict = applyPageOutcome(rec, streamId, page, requestedLimit, sentOffset);
+  rec.cursor = nextPageCursor(rec.cursor, page.meta);
+  return verdict;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,10 +392,13 @@ export interface ScanServiceDeps {
 export class ScanService {
   private nowMs: () => number;
   private log: (line: string) => void;
+  /** Identity of THIS service instance for lease ownership (SEC-H2). */
+  private readonly leaseToken: string;
 
   constructor(private deps: ScanServiceDeps) {
     this.nowMs = deps.nowMs ?? Date.now;
     this.log = deps.log ?? (() => undefined);
+    this.leaseToken = `ln-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
   }
 
   private iso(): string {
@@ -322,16 +441,48 @@ export class ScanService {
   /**
    * Advance the scan by up to budgetMs. Resumable/idempotent across
    * invocations via the persisted phase+cursor checkpoint.
+   *
+   * Concurrency lease (SEC-H2): only one invocation may advance a record at a
+   * time. The lease is acquired server-side before any stream advances,
+   * renewed on every checkpoint, and cleared at terminal states; expired
+   * leases are taken over so a crashed invocation cannot wedge a scan
+   * forever. Forge KVS consistency semantics under concurrent put/get are
+   * UNKNOWN (audit §6.4), so this is best-effort serialization — it removes
+   * the systematic double-append window rather than proving mutual exclusion.
    */
   async runChunk(budgetMs: number): Promise<ScanRecord> {
     let rec: ScanRecord = (await this.getCurrentRecord()) ?? (await this.ensureScan());
     if (rec.status === 'COMPLETE' || rec.status === 'PARTIAL' || rec.status === 'FAILED') return rec;
 
+    const now = this.nowMs();
+    if (
+      rec.leaseUntilEpochMs !== null &&
+      rec.leaseUntilEpochMs > now &&
+      rec.leaseOwnerToken !== this.leaseToken
+    ) {
+      this.log(
+        `chunk skipped: scan ${rec.scanId} leased by another invocation until ${new Date(rec.leaseUntilEpochMs).toISOString()}`,
+      );
+      return rec;
+    }
+
+    const leaseTtlMs = Math.min(Math.max(budgetMs * 2, 60_000), 1_800_000);
+    const renewLease = (): void => {
+      rec.leaseOwnerToken = this.leaseToken;
+      rec.leaseUntilEpochMs = this.nowMs() + leaseTtlMs;
+    };
+    const releaseLease = (): void => {
+      rec.leaseUntilEpochMs = null;
+      rec.leaseOwnerToken = null;
+    };
+
     rec.status = 'RUNNING';
-    const budget = createBudget(budgetMs, this.nowMs(), this.nowMs);
+    renewLease();
+    const budget = createBudget(budgetMs, now, this.nowMs);
 
     try {
       while (!budget.expired()) {
+        renewLease();
         rec.updatedAtIso = this.iso();
         let stepAdvancedPhaseOrWork = false;
         switch (rec.phase) {
@@ -396,6 +547,9 @@ export class ScanService {
       const detail = err instanceof Error ? err.message : 'unknown error';
       this.log(`scan failed id=${rec.scanId} reason=${detail}`);
     }
+    if (rec.status === 'COMPLETE' || rec.status === 'PARTIAL' || rec.status === 'FAILED') {
+      releaseLease();
+    }
     await this.deps.storage.putJSON(SCAN_ENTITY, rec, CURRENT_SCAN_ID);
     return rec;
   }
@@ -422,13 +576,19 @@ export class ScanService {
   private async guardedStep(
     rec: ScanRecord,
     streamId: string,
-    body: () => Promise<'more' | 'drained'>,
+    body: () => Promise<DrainVerdict>,
   ): Promise<ScanRecord> {
     this.markStream(rec, streamId, rec.streams[streamId]?.state === 'PENDING' ? 'RUNNING' : rec.streams[streamId].state);
     try {
       const outcome = await body();
       if (outcome === 'drained') {
         this.markStream(rec, streamId, rec.streams[streamId].reason ? 'FAILED' : 'OK', rec.streams[streamId].reason);
+        rec.cursor = {};
+        rec.phase = nextPhaseAfter(streamId);
+      } else if (outcome === 'undrained') {
+        // Unverifiable pagination continuation: keep the acquired prefix but
+        // refuse COMPLETE semantics (functional HIGH 5).
+        this.markStream(rec, streamId, 'DEGRADED', rec.streams[streamId].reason);
         rec.cursor = {};
         rec.phase = nextPhaseAfter(streamId);
       }
@@ -471,6 +631,8 @@ export class ScanService {
   private async stepJiraGroups(rec: ScanRecord): Promise<ScanRecord> {
     const namesSink = new ShardedList<GroupNameRow>(this.deps.storage, ACQ_GROUP_NAMES);
     return this.guardedStep(rec, 'jiraGroups', async () => {
+      const requestedLimit = rec.cursor.pageLimit ?? 50;
+      const sentOffset = typeof rec.cursor.startAt === 'number';
       const page = await this.deps.gateway.listGroups(rec.cursor);
       for (const g of page.values) {
         if (g.groupId) {
@@ -478,10 +640,9 @@ export class ScanService {
           await namesSink.appendAll([{ productId: 'jira', groupId: g.groupId, groupName: g.groupName ?? g.groupId }]);
         }
       }
+      const verdict = applyPageOutcome(rec, 'jiraGroups', page, requestedLimit, sentOffset);
       rec.cursor = nextPageCursor(rec.cursor, page.meta);
-      rec.streams.jiraGroups.pagesFetched += 1;
-      rec.streams.jiraGroups.itemsFetched += page.values.length;
-      return page.meta.isLast === false ? 'more' : 'drained';
+      return verdict;
     });
   }
 
@@ -497,17 +658,22 @@ export class ScanService {
       return rec;
     }
     try {
+      const requestedLimit = rec.cursor.pageLimit ?? 50;
+      const sentOffset = typeof rec.cursor.startAt === 'number';
       const page = await this.deps.gateway.listGroupMembers(groupId, rec.cursor);
       await membersSink.appendAll(page.values.filter((u) => u.accountId).map((u) => ({ groupId, accountId: u.accountId as string })));
-      rec.streams.jiraGroupMembers.pagesFetched += 1;
-      rec.streams.jiraGroupMembers.itemsFetched += page.values.length;
+      const verdict = applyPageOutcome(rec, 'jiraGroupMembers', page, requestedLimit, sentOffset);
       const next = nextPageCursor(rec.cursor, page.meta);
-      if (page.meta.isLast === false && (next.cursor || next.startAt !== undefined)) {
+      if (verdict === 'more' && (next.cursor !== undefined || next.startAt !== undefined)) {
         rec.cursor = next;
-      } else {
-        rec.pendingJiraGroupIds.shift();
-        rec.cursor = {};
+        return rec; // same group resumes next step with the persisted cursor
       }
+      if (verdict === 'undrained') {
+        // Unverifiable continuation inside this group: keep prefix, degrade.
+        this.markStream(rec, 'jiraGroupMembers', 'DEGRADED', rec.streams.jiraGroupMembers.reason);
+      }
+      rec.pendingJiraGroupIds.shift();
+      rec.cursor = {};
     } catch (err) {
       this.failStreamFromError(rec, 'jiraGroupMembers', err, 'group/member');
       rec.pendingJiraGroupIds.shift();
@@ -531,6 +697,8 @@ export class ScanService {
   private async stepConfluenceGroups(rec: ScanRecord): Promise<ScanRecord> {
     const namesSink = new ShardedList<GroupNameRow>(this.deps.storage, ACQ_GROUP_NAMES);
     return this.guardedStep(rec, 'confluenceGroups', async () => {
+      const requestedLimit = rec.cursor.pageLimit ?? 50;
+      const sentOffset = typeof rec.cursor.startAt === 'number';
       const page = await this.deps.gateway.listConfluenceGroups(rec.cursor);
       for (const g of page.values) {
         if (g.groupId) {
@@ -538,9 +706,9 @@ export class ScanService {
           await namesSink.appendAll([{ productId: 'confluence', groupId: g.groupId, groupName: g.groupName ?? g.groupId }]);
         }
       }
+      const verdict = applyPageOutcome(rec, 'confluenceGroups', page, requestedLimit, sentOffset);
       rec.cursor = nextPageCursor(rec.cursor, page.meta);
-      rec.streams.confluenceGroups.pagesFetched += 1;
-      return page.meta.isLast === false ? 'more' : 'drained';
+      return verdict;
     });
   }
 
@@ -559,15 +727,19 @@ export class ScanService {
       return rec;
     }
     try {
+      const requestedLimit = rec.cursor.pageLimit ?? 50;
+      const sentOffset = typeof rec.cursor.startAt === 'number';
       const page = await this.deps.gateway.listConfluenceGroupMembers(groupId, rec.cursor);
       await membersSink.appendAll(page.values.filter((u) => u.accountId).map((u) => ({ groupId, accountId: u.accountId as string })));
-      rec.streams.confluenceMembers.pagesFetched += 1;
-      rec.streams.confluenceMembers.itemsFetched += page.values.length;
+      const verdict = applyPageOutcome(rec, 'confluenceMembers', page, requestedLimit, sentOffset);
       const next = nextPageCursor(rec.cursor, page.meta);
-      if (page.meta.isLast === false && (next.cursor || next.startAt !== undefined)) {
+      if (verdict === 'more' && (next.cursor !== undefined || next.startAt !== undefined)) {
         rec.cursor = next;
         rec.pendingConfluenceGroupIds.unshift(groupId); // continue same group next step
         return rec;
+      }
+      if (verdict === 'undrained') {
+        this.markStream(rec, 'confluenceMembers', 'DEGRADED', rec.streams.confluenceMembers.reason);
       }
       rec.cursor = {};
     } catch (err) {
@@ -753,7 +925,15 @@ function buildContributionMap(
   for (const c of contribs) {
     const key = c.contributorAccountId ?? '';
     const entry = m.get(key) ?? { hits: [], complete: true };
-    if (c.lastModified) entry.hits.push(c);
+    if (c.lastModified) {
+      entry.hits.push(c);
+    } else if (c.contentId !== null) {
+      // A real content hit whose temporal field is missing/unparseable is
+      // UNVERIFIABLE evidence (ERR-6), not absence: the account's sweep can
+      // no longer claim complete coverage. Zero-hit sentinel rows
+      // (contentId === null) are the only rows that may certify absence.
+      entry.complete = false;
+    }
     m.set(key, entry);
   }
   if (!streamOk) {

@@ -37,18 +37,33 @@ import type {
 import { ENDPOINTS } from '../types';
 import {
   adaptOutcome,
+  attributedContribution,
   parseWireAppLicense,
   parseWireApplicationRoles,
-  parseWireContributions,
-  parseWireGroupMembers,
-  parseWireGroups,
-  parseWireIssueActivity,
+  parseWireConfluenceMemberItem,
+  parseWireContributionItem,
+  parseWireGroupItem,
+  parseWireIssueActivityItem,
   parseWireOrgUsers,
   parseWirePlans,
   parseWireSeatCount,
-  parseWireUsers,
+  parseWireUserItem,
 } from '../adapters';
 import { DEFAULT_PACING, nextRetryDelay, seededRng } from '../pacing';
+
+/**
+ * Pagination termination flavors (functional HIGH 5):
+ *  - 'offset' endpoints document isLast/total but live shapes are VERIFY-LIVE;
+ *    when a response carries NEITHER an explicit terminal flag NOR a
+ *    continuation pointer, isLast is surfaced as null (UNKNOWN). The scan
+ *    service then probes forward and treats an unverifiable continuation as
+ *    INCOMPLETE — never as complete.
+ *  - 'token' endpoints define termination protocol-side (no next token /
+ *    next link == end of result set, per docs/API_FEASIBILITY_ADDENDUM.md
+ *    A1 and the org-API docs). Absence of the continuation pointer after a
+ *    non-empty page IS the documented end signal.
+ */
+type TerminationFlavor = 'offset' | 'token';
 
 export type ForgeTransportRequest = GatewayRequest;
 
@@ -252,24 +267,38 @@ export class ForgeAtlassianGateway implements AtlassianGateway {
     return adaptOutcome<T>({ status: raw.status, headers: raw.headers, json: raw.json }, parseBody);
   }
 
-  private metaFrom(json: Record<string, unknown>, values: unknown[], requestedLimit: number): PageMeta {
+  private metaFrom(
+    json: Record<string, unknown>,
+    values: unknown[],
+    flavor: TerminationFlavor,
+  ): PageMeta {
     const startAt = typeof json.startAt === 'number' ? json.startAt : typeof json.start === 'number' ? json.start : null;
-    const totalRaw = json.total ?? json.size ?? json.totalSize ?? null;
+    // `size` is the PAGE SIZE in wiki REST responses, not the collection
+    // total — only unambiguous total fields are trusted here.
+    const totalRaw = json.total ?? json.totalSize ?? null;
     const total = typeof totalRaw === 'number' ? totalRaw : null;
     const isLastRaw = json.isLast ?? json.last ?? null;
-    const nextPageToken = typeof json.nextPageToken === 'string' ? json.nextPageToken : null;
+    const nextPageToken = typeof json.nextPageToken === 'string' && json.nextPageToken.length > 0 ? json.nextPageToken : null;
     const links = json._links as Record<string, unknown> | undefined;
     const nextHref = links && typeof links.next === 'string' ? links.next : null;
-    const maxResults = typeof json.maxResults === 'number' ? json.maxResults : typeof json.limit === 'number' ? json.limit : requestedLimit;
-    const meta: PageMeta = {
+    let isLast: boolean | null;
+    if (typeof isLastRaw === 'boolean') {
+      isLast = isLastRaw;
+    } else if (flavor === 'token') {
+      isLast = nextPageToken !== null || nextHref !== null ? false : true;
+    } else {
+      // Unknown continuation state: surfaced as null so downstream treats the
+      // stream as unverified instead of silently complete (functional HIGH 5).
+      isLast = nextPageToken !== null || nextHref !== null ? false : null;
+    }
+    return {
       startAt,
       total,
-      pageSize: values.length > 0 ? Math.max(values.length, 0) || maxResults : 0,
-      isLast: typeof isLastRaw === 'boolean' ? isLastRaw : nextHref === null && nextPageToken === null,
+      pageSize: Math.max(values.length, 0),
+      isLast,
       nextCursor: nextPageToken,
       nextHref,
     };
-    return meta;
   }
 
   private async page<T>(
@@ -277,8 +306,9 @@ export class ForgeAtlassianGateway implements AtlassianGateway {
     endpoint: string,
     path: string,
     extractValues: (json: Record<string, unknown>) => unknown[] | null,
-    parseItem: (raw: unknown) => T | null,
+    parseItem: (raw: unknown) => T,
     cursor: PageCursor,
+    flavor: TerminationFlavor,
     buildPath: (p: string, c: PageCursor) => string = (p) => p,
   ): Promise<GatewayPage<T>> {
     const raw = await this.pacedRequest({
@@ -292,9 +322,9 @@ export class ForgeAtlassianGateway implements AtlassianGateway {
     if (!rec || !arr) {
       throw new GatewayPageError(raw.status, callName, null);
     }
-    const parsed = arr.map(parseItem).filter((x): x is T => x !== null);
+    const parsed = arr.map(parseItem);
     void endpoint;
-    return { values: parsed, meta: this.metaFrom(rec, parsed, cursor.pageLimit ?? 50), degradedFields: [] };
+    return { values: parsed, meta: this.metaFrom(rec, parsed, flavor), degradedFields: [] };
   }
 
   // ------------------------------------------------------------------ roles/plans
@@ -324,18 +354,9 @@ export class ForgeAtlassianGateway implements AtlassianGateway {
       ENDPOINTS.jiraUsers,
       ENDPOINTS.jiraUsers,
       (json) => (Array.isArray(json.values) ? json.values : Array.isArray(json) ? json : null),
-      (raw) => {
-        const r = raw as Record<string, unknown>;
-        return {
-          accountId: typeof r.accountId === 'string' ? r.accountId : null,
-          displayName: typeof r.displayName === 'string' ? r.displayName : null,
-          active: typeof r.active === 'boolean' ? r.active : null,
-          emailHint: typeof r.emailAddress === 'string' ? r.emailAddress.toLowerCase() : null,
-          accountType: typeof r.accountType === 'string' ? r.accountType : null,
-          createdDate: typeof r.createdDate === 'string' ? r.createdDate : null,
-        } satisfies WireUser;
-      },
+      parseWireUserItem,
       cursor,
+      'offset',
       (p, c) => `${p}?startAt=${c.startAt ?? 0}&maxResults=${c.pageLimit ?? 50}`,
     );
   }
@@ -346,11 +367,9 @@ export class ForgeAtlassianGateway implements AtlassianGateway {
       ENDPOINTS.jiraGroupsBulk,
       ENDPOINTS.jiraGroupsBulk,
       (json) => (Array.isArray(json.values) ? json.values : null),
-      (raw) => {
-        const r = raw as Record<string, unknown>;
-        return { groupId: typeof r.groupId === 'string' ? r.groupId : typeof r.id === 'string' ? r.id : null, groupName: typeof r.name === 'string' ? r.name : null } satisfies WireGroup;
-      },
+      parseWireGroupItem,
       cursor,
+      'offset',
       (p, c) => `${p}?startAt=${c.startAt ?? 0}&maxResults=${c.pageLimit ?? 50}`,
     );
   }
@@ -361,30 +380,11 @@ export class ForgeAtlassianGateway implements AtlassianGateway {
       ENDPOINTS.jiraGroupMember,
       ENDPOINTS.jiraGroupMember,
       (json) => (Array.isArray(json.values) ? json.values : null),
-      (raw) => {
-        const r = raw as Record<string, unknown>;
-        return {
-          accountId: typeof r.accountId === 'string' ? r.accountId : null,
-          displayName: typeof r.displayName === 'string' ? r.displayName : null,
-          active: typeof r.active === 'boolean' ? r.active : null,
-          emailHint: typeof r.emailAddress === 'string' ? r.emailAddress.toLowerCase() : null,
-          accountType: typeof r.accountType === 'string' ? r.accountType : null,
-          createdDate: typeof r.createdDate === 'string' ? r.createdDate : null,
-        } satisfies WireUser;
-      },
+      parseWireUserItem,
       cursor,
+      'offset',
       (p, c) => `${p}?groupId=${encodeURIComponent(groupId)}&includeInactiveUsers=true&startAt=${c.startAt ?? 0}&maxResults=${c.pageLimit ?? 50}`,
     );
-  }
-
-  async listUserGroups(accountId: string): Promise<GatewayOutcome<WireGroup[]>> {
-    const out = await this.outcome(
-      `listUserGroups(${accountId})`,
-      `${ENDPOINTS.jiraUserGroups}?accountId=${encodeURIComponent(accountId)}`,
-      parseWireGroups,
-    );
-    if (!out.ok || out.value === null) return { ...out, value: null };
-    return { ...out, value: out.value.values };
   }
 
   // ------------------------------------------------------------------ confluence
@@ -399,11 +399,9 @@ export class ForgeAtlassianGateway implements AtlassianGateway {
         if (Array.isArray(json)) return json as unknown[];
         return null;
       },
-      (raw) => {
-        const r = raw as Record<string, unknown>;
-        return { groupId: typeof r.id === 'string' ? r.id : null, groupName: typeof r.name === 'string' ? r.name : null } satisfies WireGroup;
-      },
+      parseWireGroupItem,
       cursor,
+      'offset',
       (p, c) => `${p}?start=${c.startAt ?? 0}&limit=${c.pageLimit ?? 50}`,
     );
   }
@@ -411,26 +409,29 @@ export class ForgeAtlassianGateway implements AtlassianGateway {
   async listConfluenceGroupMembers(groupId: string, cursor: PageCursor): Promise<GatewayPage<WireUser>> {
     return this.page(
       'listConfluenceGroupMembers',
-      ENDPOINTS.confluenceGroupMembers.replace('{groupId}', encodeURIComponent(groupId)),
       ENDPOINTS.confluenceGroupMembers,
+      // The REQUEST path must carry the substituted id; the template stays
+      // endpoint-only telemetry. (Pre-repair these two were swapped: live
+      // calls would have requested the literal '{groupId}' path — a defect
+      // only the raw-payload live-shape parity test can observe.)
+      ENDPOINTS.confluenceGroupMembers.replace('{groupId}', encodeURIComponent(groupId)),
       (json) => (Array.isArray(json.results) ? json.results : null),
-      (raw) => {
-        const r = raw as Record<string, unknown>;
-        const account = (r.account ?? r) as Record<string, unknown>;
-        return {
-          accountId: typeof account.accountId === 'string' ? account.accountId : null,
-          displayName: typeof account.displayName === 'string' ? account.displayName : null,
-          active: typeof account.active === 'boolean' ? account.active : null,
-          emailHint: typeof account.email === 'string' ? account.email.toLowerCase() : null,
-          accountType: typeof account.type === 'string' ? account.type : null,
-          createdDate: null,
-        } satisfies WireUser;
-      },
+      parseWireConfluenceMemberItem,
       cursor,
+      'offset',
       (p, c) => `${p}?start=${c.startAt ?? 0}&limit=${c.pageLimit ?? 50}`,
     );
   }
 
+  /**
+   * Per-account Confluence contribution sweep. The CQL is window-filtered by
+   * construction (`lastmodified >= windowStart`), so ANY returned hit IS
+   * within-window activity and its `version.when` timestamp is preserved
+   * through the shared adapter. Building hits inline with a null timestamp —
+   * the pre-repair defect — fabricated "measured absence" for active users
+   * and is structurally impossible now: parsing happens ONLY in
+   * adapters.parseWireContributionItem (functional BLOCKER 1).
+   */
   async searchConfluenceContributions(
     cqlAccountId: string,
     windowStartIso: string,
@@ -438,23 +439,17 @@ export class ForgeAtlassianGateway implements AtlassianGateway {
   ): Promise<GatewayPage<WireContributionHit>> {
     const cql = `contributor="accountid:${cqlAccountId}" and lastmodified>="${windowStartIso.slice(0, 10)}" order by lastmodified desc`;
     const path = `${ENDPOINTS.confluenceSearch}?cql=${encodeURIComponent(cql)}&cursor=${cursor.cursor ?? ''}&limit=${cursor.pageLimit ?? 25}`;
-    return this.page(
+    const pageOut = await this.page(
       'searchConfluenceContributions',
       ENDPOINTS.confluenceSearch,
       path,
       (json) => (Array.isArray(json.results) ? json.results : null),
-      (raw) => {
-        const r = raw as Record<string, unknown>;
-        const content = (r.content ?? {}) as Record<string, unknown>;
-        return {
-          contentId: typeof content.id === 'string' ? content.id : null,
-          lastModified: null, // identity comes from the per-account query itself
-          contributorAccountId: cqlAccountId,
-          creatorAccountId: cqlAccountId,
-        } satisfies WireContributionHit;
-      },
+      (raw) => attributedContribution(parseWireContributionItem(raw), cqlAccountId),
       cursor,
+      'token',
     );
+    void windowStartIso; // encoded into the CQL above (window-filtered query)
+    return pageOut;
   }
 
   // ------------------------------------------------------------------ jira activity
@@ -480,41 +475,11 @@ export class ForgeAtlassianGateway implements AtlassianGateway {
     const rec = raw.json !== null && typeof raw.json === 'object' ? (raw.json as Record<string, unknown>) : null;
     const issues = rec && Array.isArray(rec.issues) ? rec.issues : null;
     if (!rec || !issues) throw new GatewayPageError(raw.status, 'searchIssueActivity', null);
-    const values = issues.map((i): WireIssueActivityHit | null => {
-      const ir = i as Record<string, unknown>;
-      const fields = (ir.fields ?? {}) as Record<string, unknown>;
-      const idOf = (v: unknown): string | null =>
-        v === null || v === undefined
-          ? null
-          : typeof v === 'string'
-            ? v
-            : typeof v === 'object' && v !== null && typeof (v as Record<string, unknown>).accountId === 'string'
-              ? ((v as Record<string, unknown>).accountId as string)
-              : null;
-      const iso = (v: unknown): string | null => (typeof v === 'string' && Number.isFinite(Date.parse(v)) ? new Date(Date.parse(v)).toISOString() : null);
-      return {
-        issueKey: typeof ir.key === 'string' ? ir.key : typeof ir.id === 'string' ? ir.id : null,
-        updated: iso(fields.updated),
-        created: iso(fields.created),
-        creatorAccountId: idOf(fields.creator),
-        assigneeAccountId: idOf(fields.assignee),
-        reporterAccountId: idOf(fields.reporter),
-      };
-    }).filter((x): x is WireIssueActivityHit => x !== null);
+    const values = issues.map(parseWireIssueActivityItem);
 
     return {
       values,
-      meta: {
-        startAt: null,
-        total: typeof rec.total === 'number' ? rec.total : null,
-        pageSize: values.length,
-        isLast:
-          typeof rec.nextPageToken === 'string' && rec.nextPageToken.length > 0
-            ? false
-            : true,
-        nextCursor: typeof rec.nextPageToken === 'string' && rec.nextPageToken.length > 0 ? rec.nextPageToken : null,
-        nextHref: null,
-      },
+      meta: this.metaFrom(rec, values, 'token'),
       degradedFields: [],
     };
   }

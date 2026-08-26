@@ -84,8 +84,14 @@ export function buildDashboardViewModel(report: FinalReport): DashboardViewModel
 
   return {
     dataMode: report.dataMode,
-    showNonLiveBanner: report.dataMode === 'FIXTURE',
-    nonLiveBannerText: 'DEMO DATA \u2014 NOT A LIVE SCAN',
+    // Fail CLOSED on provenance (SEC-M2): anything that is not affirmatively
+    // LIVE — including a missing/corrupted stamp — renders the non-live
+    // banner. A banner-less render requires proof of live origin.
+    showNonLiveBanner: report.dataMode !== 'LIVE',
+    nonLiveBannerText:
+      report.dataMode === 'FIXTURE'
+        ? 'DEMO DATA \u2014 NOT A LIVE SCAN'
+        : `UNVERIFIED DATA PROVENANCE (dataMode=${String(report.dataMode)}) \u2014 TREAT AS NON-LIVE`,
     hero: {
       label: 'ESTIMATED ANNUAL SAVINGS',
       displayDollars: displayDollarsFromCents(exactSafe + exactReview),

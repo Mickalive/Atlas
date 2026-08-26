@@ -30,16 +30,17 @@ import type {
 } from '../types';
 import {
   adaptOutcome,
+  attributedContribution,
   parseWireAppLicense,
   parseWireApplicationRoles,
-  parseWireContributions,
-  parseWireGroupMembers,
-  parseWireGroups,
-  parseWireIssueActivity,
+  parseWireConfluenceMemberItem,
+  parseWireContributionItem,
+  parseWireIssueActivityItem,
   parseWireOrgUsers,
   parseWirePlans,
   parseWireSeatCount,
-  parseWireUsers,
+  parseWireGroupItem,
+  parseWireUserItem,
 } from '../adapters';
 import { DEFAULT_PACING, nextRetryDelay, seededRng } from '../pacing';
 import {
@@ -256,23 +257,28 @@ export class FixtureAtlassianGateway implements AtlassianGateway {
 
   // ------------------------------------------------------------------ jira inventory
 
-  private wireUsersAll(): WireUser[] {
-    const wire: WireUser[] = [];
+  /**
+   * RAW HTTP-shaped user payloads (SEC-M3): the fixture synthesizes the same
+   * JSON shape production receives, then BOTH transports parse through
+   * adapters.parseWireUserItem. The fixture never builds Wire DTOs inline.
+   */
+  private rawJiraUsers(): Array<Record<string, unknown>> {
+    const rows: Array<Record<string, unknown>> = [];
     for (const u of usersFor(this.options.variant)) {
-      const rec: WireUser = {
+      const rec: Record<string, unknown> = {
         accountId: u.accountId,
         displayName: u.displayName,
         active: u.active,
-        emailHint: u.emailHint,
+        emailAddress: u.emailHint,
         accountType: u.accountType,
         createdDate: wireDate(u.createdDaysAgo),
       };
-      wire.push(rec);
+      rows.push(rec);
       if (DUPLICATE_ACCOUNT_IDS.has(u.accountId)) {
-        wire.push({ ...rec, displayName: `${u.displayName} (dup)` });
+        rows.push({ ...rec, displayName: `${u.displayName} (dup)` });
       }
     }
-    return wire.sort((a, b) => (a.accountId ?? '').localeCompare(b.accountId ?? ''));
+    return rows.sort((a, b) => String(a.accountId).localeCompare(String(b.accountId)));
   }
 
   async listJiraUsers(cursor: PageCursor): Promise<GatewayPage<WireUser>> {
@@ -281,17 +287,16 @@ export class FixtureAtlassianGateway implements AtlassianGateway {
         // Deterministic burst-limit breach with a 1s Retry-After floor (FP-21).
         throw new FixtureFault(429, { 'retry-after': '1', 'ratelimit-reason': 'jira-burst-based' });
       }
-      const wire = this.wireUsersAll();
-      const { slice, meta } = paginateOffsets(wire, cursor, [2, 3]);
-      return { values: slice, meta, degradedFields: [] };
+      const { slice, meta } = paginateOffsets(this.rawJiraUsers(), cursor, [2, 3]);
+      return { values: slice.map(parseWireUserItem), meta, degradedFields: [] };
     });
   }
 
   async listGroups(cursor: PageCursor): Promise<GatewayPage<WireGroup>> {
     return this.paged('listGroups', '/rest/api/3/group/bulk', async () => {
-      const wire: WireGroup[] = GROUPS.map((g) => ({ groupId: g.id, groupName: g.name }));
-      const { slice, meta } = paginateOffsets(wire, cursor, [1, 2]);
-      return { values: slice, meta, degradedFields: [] };
+      const raw = GROUPS.map((g) => ({ id: g.id, name: g.name }));
+      const { slice, meta } = paginateOffsets(raw, cursor, [1, 2]);
+      return { values: slice.map(parseWireGroupItem), meta, degradedFields: [] };
     });
   }
 
@@ -303,37 +308,18 @@ export class FixtureAtlassianGateway implements AtlassianGateway {
       }
       const members = usersFor(this.options.variant)
         .filter((u) => u.jiraGroups.includes(groupId))
-        .map<WireUser>((u) => ({
+        .map((u) => ({
           accountId: u.accountId,
           displayName: u.displayName,
           active: u.active,
-          emailHint: u.emailHint,
+          emailAddress: u.emailHint,
           accountType: u.accountType,
           createdDate: wireDate(u.createdDaysAgo),
         }))
-        .sort((a, b) => (a.accountId ?? '').localeCompare(b.accountId ?? ''));
+        .sort((a, b) => a.accountId.localeCompare(b.accountId));
       const { slice, meta } = paginateOffsets(members, cursor, [2]);
-      return { values: slice, meta, degradedFields: [] };
+      return { values: slice.map(parseWireUserItem), meta, degradedFields: [] };
     });
-  }
-
-  async listUserGroups(accountId: string): Promise<GatewayOutcome<WireGroup[]>> {
-    const spec = usersFor(this.options.variant).find((u) => u.accountId === accountId);
-    const ids = spec ? [...spec.jiraGroups].sort() : [];
-    const out = await this.requestOutcome(
-      `listUserGroups(${accountId})`,
-      '/rest/api/3/user/groups',
-      () => ({
-        status: 200,
-        headers: {},
-        json: { values: ids.map((id) => ({ groupId: id, name: GROUPS.find((g) => g.id === id)?.name ?? id })) },
-      }),
-      parseWireGroups,
-    );
-    if (!out.ok || out.value === null) {
-      return { ...out, value: null };
-    }
-    return { ...out, value: out.value.values };
   }
 
   // ------------------------------------------------------------------ confluence
@@ -344,10 +330,10 @@ export class FixtureAtlassianGateway implements AtlassianGateway {
         throw new FixtureFault(403, {});
       }
       const confGroups = GROUPS.filter((g) => g.name.toLowerCase().includes('confluence'));
-      const wire: WireGroup[] = confGroups.map((g) => ({ groupId: g.id, groupName: g.name }));
-      const { slice, meta } = paginateOffsets(wire, cursor, [2]);
+      const raw = confGroups.map((g) => ({ id: g.id, name: g.name }));
+      const { slice, meta } = paginateOffsets(raw, cursor, [2]);
       // Confluence group listing has no reliable totalSize: surfaced as degraded field.
-      return { values: slice, meta: { ...meta, total: null }, degradedFields: ['meta.total'] };
+      return { values: slice.map(parseWireGroupItem), meta: { ...meta, total: null }, degradedFields: ['meta.total'] };
     });
   }
 
@@ -356,19 +342,22 @@ export class FixtureAtlassianGateway implements AtlassianGateway {
       if (this.options.variant === 'insufficient_permissions') {
         throw new FixtureFault(403, {});
       }
+      // Wiki REST wraps the user under `account` and exposes `email` —
+      // exercised through the SAME adapter as production (SEC-M3).
       const members = usersFor(this.options.variant)
         .filter((u) => u.confluenceGroups.includes(groupId))
-        .map<WireUser>((u) => ({
-          accountId: u.accountId,
-          displayName: u.displayName,
-          active: u.active,
-          emailHint: u.emailHint,
-          accountType: u.accountType,
-          createdDate: null,
+        .map((u) => ({
+          account: {
+            accountId: u.accountId,
+            displayName: u.displayName,
+            active: u.active,
+            email: u.emailHint,
+            type: u.accountType,
+          },
         }))
-        .sort((a, b) => (a.accountId ?? '').localeCompare(b.accountId ?? ''));
+        .sort((a, b) => String(a.account.accountId).localeCompare(String(b.account.accountId)));
       const { slice, meta } = paginateOffsets(members, cursor, [2]);
-      return { values: slice, meta, degradedFields: [] };
+      return { values: slice.map(parseWireConfluenceMemberItem), meta, degradedFields: [] };
     });
   }
 
@@ -381,22 +370,19 @@ export class FixtureAtlassianGateway implements AtlassianGateway {
       if (this.options.variant === 'insufficient_permissions') {
         throw new FixtureFault(403, {});
       }
-      void windowStartIso;
+      // Window honored symmetrically with the live CQL filter (SEC-M3): a
+      // contribution older than the window is NOT returned, exactly as
+      // `lastmodified >= windowStart` behaves in production.
+      const windowStartMs = Date.parse(windowStartIso);
       const days = contributionsFor(this.options.variant).get(cqlAccountId);
-      const hits: WireContributionHit[] =
-        days === undefined
-          ? []
-          : [
-              {
-                contentId: `fixture-content-${cqlAccountId}`,
-                lastModified: wireDate(days),
-                contributorAccountId: cqlAccountId,
-                creatorAccountId: cqlAccountId,
-              },
-            ];
+      const withinWindow =
+        days !== undefined && Date.parse(FIXTURE_SCAN_NOW) - days * 86_400_000 >= windowStartMs;
+      const rawResults = withinWindow
+        ? [{ content: { id: `fixture-content-${cqlAccountId}` }, version: { when: wireDate(days ?? null) } }]
+        : [];
       return {
-        values: hits,
-        meta: metaFor(hits, 0, Math.max(hits.length, 1), hits.length),
+        values: rawResults.map((r) => attributedContribution(parseWireContributionItem(r), cqlAccountId)),
+        meta: metaFor(rawResults, 0, Math.max(rawResults.length, 1), rawResults.length),
         degradedFields: [],
       };
     });
@@ -413,10 +399,10 @@ export class FixtureAtlassianGateway implements AtlassianGateway {
         // the presence of a cursor token, not by startAt.
         const isContinuation = typeof cursor.cursor === 'string' && cursor.cursor.length > 0;
         if (!isContinuation) {
-          const all = this.issueHitsWithin(windowStartMs);
+          const all = this.rawIssueHitsWithin(windowStartMs);
           const firstTwo = all.slice(0, 2);
           return {
-            values: firstTwo,
+            values: firstTwo.map(parseWireIssueActivityItem),
             meta: {
               startAt: 0,
               total: all.length + 50,
@@ -430,13 +416,13 @@ export class FixtureAtlassianGateway implements AtlassianGateway {
         }
         throw new FixtureFault(500, {});
       }
-      const hits = this.issueHitsWithin(windowStartMs);
-      const { slice, meta } = paginateOffsets(hits, cursor, [3, 5]);
-      return { values: slice, meta, degradedFields: [] };
+      const { slice, meta } = paginateOffsets(this.rawIssueHitsWithin(windowStartMs), cursor, [3, 5]);
+      return { values: slice.map(parseWireIssueActivityItem), meta, degradedFields: [] };
     });
   }
 
-  private issueHitsWithin(windowStartMs: number): WireIssueActivityHit[] {
+  /** RAW issue-search payload rows; parsed only via parseWireIssueActivityItem. */
+  private rawIssueHitsWithin(windowStartMs: number): Array<Record<string, unknown>> {
     return issueHitsFor(this.options.variant)
       .filter((h) => {
         if (h.malformedTimestamps) return true; // preserved on purpose (ERR-6)
@@ -444,15 +430,23 @@ export class FixtureAtlassianGateway implements AtlassianGateway {
         if (!Number.isFinite(refDays)) return true;
         return Date.parse(FIXTURE_SCAN_NOW) - refDays * 86_400_000 >= windowStartMs;
       })
-      .map<WireIssueActivityHit>((h) => ({
-        issueKey: h.key,
-        updated: h.malformedTimestamps || h.updatedDaysAgo === null ? 'not-a-timestamp' : wireDate(h.updatedDaysAgo),
-        created: h.malformedTimestamps ? 'also-not-a-timestamp' : wireDate(Number.isFinite(h.createdDaysAgo) ? h.createdDaysAgo : null),
-        creatorAccountId: h.creator,
-        assigneeAccountId: h.assignee,
-        reporterAccountId: h.reporter,
+      .map((h) => ({
+        key: h.key,
+        fields: {
+          creator: h.creator,
+          assignee: h.assignee,
+          reporter: h.reporter,
+          created:
+            h.malformedTimestamps
+              ? 'also-not-a-timestamp'
+              : wireDate(Number.isFinite(h.createdDaysAgo) ? h.createdDaysAgo : null),
+          updated:
+            h.malformedTimestamps || h.updatedDaysAgo === null
+              ? 'not-a-timestamp'
+              : wireDate(h.updatedDaysAgo),
+        },
       }))
-      .sort((a, b) => (a.issueKey ?? '').localeCompare(b.issueKey ?? ''));
+      .sort((a, b) => String(a.key).localeCompare(String(b.key)));
   }
 
   // ------------------------------------------------------------------ org enrichment
@@ -509,4 +503,11 @@ export class FixtureAtlassianGateway implements AtlassianGateway {
 }
 
 // Re-exported for contract tests asserting shape equivalence.
-export { parseWireUsers, parseWireContributions, parseWireGroupMembers, parseWireIssueActivity };
+export {
+  parseWireUserItem,
+  parseWireContributionItem,
+  parseWireUsers,
+  parseWireContributions,
+  parseWireGroupMembers,
+  parseWireIssueActivity,
+} from '../adapters';

@@ -33,28 +33,36 @@ export function exportHeaderLines(report: FinalReport): string[] {
   return lines;
 }
 
+/**
+ * Spreadsheet-formula injection defense (SEC-L1): display names come from the
+ * scanned tenant's own directory, so a co-tenant profile could carry a
+ * formula-shaped string. Cells that a spreadsheet would interpret as formulas
+ * are neutralized with a leading apostrophe.
+ */
+function neutralizeFormulaPrefix(s: string): string {
+  return /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+}
+
 function csvEscape(v: string | number | null): string {
   const s = v === null ? '' : String(v);
-  return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+  const safe = neutralizeFormulaPrefix(s);
+  return /[",\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 }
 
 export function buildCsvExport(report: FinalReport): string {
   const rows: string[][] = [];
-  rows.push(['risk_class', 'account_id', 'display_name', 'products', 'access_paths', 'annual_savings_usd_display', 'realization_timing', 'rule_id', 'threshold', 'evidence_summary', 'data_mode']);
-  let safeSumExact = 0;
-  let reviewSumExact = 0;
+  rows.push(['risk_class', 'account_id', 'display_name', 'products', 'products_measured', 'access_paths', 'annual_savings_usd_display', 'realization_timing', 'rule_id', 'threshold', 'evidence_summary', 'data_mode']);
   for (const rec of sortRecommendations(report.recommendations)) {
     const dollars =
       rec.money && rec.money.bounded
         ? displayDollarsFromCents(rec.money.annualDeltaCents)
         : null;
-    if (rec.risk.klass === 'SAFE_NOW' && rec.money?.bounded) safeSumExact += rec.money.annualDeltaCents;
-    if (rec.risk.klass === 'REVIEW' && rec.money?.bounded) reviewSumExact += rec.money.annualDeltaCents;
     rows.push([
       rec.risk.klass,
       rec.accountId,
       rec.displayName ?? '',
       rec.products.join('|'),
+      rec.productsMeasured.join('|'),
       rec.accessPaths.join('|'),
       dollars === null ? 'QUOTE_REQUIRED' : String(dollars),
       rec.money ? rec.money.realizationTiming : '',
@@ -64,21 +72,24 @@ export function buildCsvExport(report: FinalReport): string {
       rec.dataMode,
     ]);
   }
-  // Totals row computed as exact-sum-then-round-once; per-row display values
-  // are individually floored, so the totals row is authoritative (documented rounding).
+  // TOTALS rows render report.totals — the SAME pool policy as the dashboard
+  // hero and the markdown brief (functional MEDIUM 6). Per-row display values
+  // are individually floored; totals are exact-sum-then-round-once and are
+  // authoritative (documented rounding). Pools include the sourced portion of
+  // partially-bounded cards per computeTotals.
   rows.push([]);
-  rows.push(['TOTALS', '', '', '', '', '', '', '', '', '', report.dataMode]);
+  rows.push(['TOTALS', '', '', '', '', '', '', '', '', '', '', report.dataMode]);
   rows.push([
     'SAFE_NOW_total',
-    '', '', '', '',
-    String(displayDollarsFromCents(safeSumExact)),
+    '', '', '', '', '',
+    String(displayDollarsFromCents(report.totals.safeNowAnnualCents)),
     'exact_sum_rounded_down_once',
     '', '', '', report.dataMode,
   ]);
   rows.push([
     'REVIEW_pool_total',
-    '', '', '', '',
-    String(displayDollarsFromCents(reviewSumExact)),
+    '', '', '', '', '',
+    String(displayDollarsFromCents(report.totals.reviewPoolAnnualCents)),
     'exact_sum_rounded_down_once',
     '', '', '', report.dataMode,
   ]);
@@ -116,8 +127,16 @@ export function buildMarkdownBrief(report: FinalReport): string {
     if (rec.risk.klass !== 'SAFE_NOW' && rec.risk.klass !== 'REVIEW') continue;
     const money =
       rec.money && rec.money.bounded ? `$${displayDollarsFromCents(rec.money.annualDeltaCents)}` : 'QUOTE';
+    // Ride-along labeling (functional MEDIUM 7): show which listed products
+    // carry measured evidence vs riding on the account-level classification.
+    const rideAlong = rec.products.filter((p) => !rec.productsMeasured.includes(p));
+    const productsLabel =
+      rideAlong.length > 0 && rec.productsMeasured.length > 0
+        ? `${rec.products.join('+')} (measured: ${rec.productsMeasured.join('+')})`
+        : rec.products.join('+');
+    const accountLabel = rec.displayName ?? rec.accountId;
     out.push(
-      `| ${rec.risk.klass} | ${rec.displayName ?? rec.accountId} | ${rec.products.join('+')} | ${money} | ______ | ${rec.why.ruleId}: ${rec.why.thresholdSummary} | ${rec.evidence.length} observation(s), re-derivable in-app |`,
+      `| ${rec.risk.klass} | ${accountLabel} | ${productsLabel} | ${money} | ______ | ${rec.why.ruleId}: ${rec.why.thresholdSummary} | ${rec.evidence.length} observation(s), re-derivable in-app |`,
     );
   }
   out.push('');

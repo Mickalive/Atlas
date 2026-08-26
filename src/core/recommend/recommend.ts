@@ -108,10 +108,16 @@ export function buildRecommendation(input: RecommendationInput): Recommendation 
     }
   }
 
-  const reclaimNote =
-    input.accessPaths.length > 1
-      ? `Seat held via ${input.accessPaths.length} group paths; removal must cover all of them to free exactly one seat (counted once here).`
-      : 'Single seat-holding path.';
+  // Honesty labeling (functional MEDIUM 7): distinguish seats backed by
+  // product-specific measurements from ride-along seats on the same account.
+  const productsMeasured = [...new Set(input.classification.corroboratedProducts)].sort();
+  const rideAlong = products.filter((p) => !productsMeasured.includes(p));
+  const measuredNote =
+    products.length > 0 && rideAlong.length > 0
+      ? productsMeasured.length > 0
+        ? ` Activity evidence was measured on ${productsMeasured.join(' + ')}; ${rideAlong.join(' + ')} ride${rideAlong.length === 1 ? 's' : ''} along on the account-level classification without product-specific sweeps.`
+        : ` No product-specific activity sweep backs these seats; classification rides on account-level evidence.`
+      : '';
 
   return {
     id: `rec:${input.accountId}:${products.join('+') || 'noproduct'}`,
@@ -119,10 +125,11 @@ export function buildRecommendation(input: RecommendationInput): Recommendation 
     accountId: input.accountId,
     displayName: input.displayName,
     products,
+    productsMeasured,
     accessPaths: input.accessPaths,
     what:
       products.length > 0
-        ? `Reclaim 1 licensed seat for ${input.displayName ?? input.accountId} in ${products.join(' + ')}`
+        ? `Reclaim 1 licensed seat for ${input.displayName ?? input.accountId} in ${products.join(' + ')}.${measuredNote}`
         : `Access review for ${input.displayName ?? input.accountId}`,
     why: {
       ruleId: input.classification.ruleId,
@@ -142,6 +149,13 @@ export interface TotalsInput {
   recommendations: Recommendation[];
   deactivatedExcludedCount: number;
   protectedExcludedFromSafeNow: number;
+  /**
+   * KEEP/UNKNOWN counts over the FULL analysis population (functional HIGH 4).
+   * Emission is capped, so recounting from emitted cards understates collapsed
+   * counts; when provided these population figures are authoritative.
+   */
+  populationKeepCount?: number;
+  populationUnknownCount?: number;
 }
 
 export function computeTotals(input: TotalsInput): ScanTotals {
@@ -153,10 +167,12 @@ export function computeTotals(input: TotalsInput): ScanTotals {
   let unknownCount = 0;
 
   /**
-   * Pool policy: pools contain only defensible exact-cent deltas (bounded
-   * estimates, or the sourced-portion of partially-bounded estimates).
-   * Items with any unbounded component are additionally counted as
-   * quote-required so nothing silently disappears.
+   * Pool policy (single source of truth — dashboard, markdown brief and CSV
+   * TOTALS rows all render THIS result; functional MEDIUM 6): pools contain
+   * only defensible exact-cent deltas (bounded estimates, or the sourced-
+   * portion of partially-bounded estimates). Items with any unbounded
+   * component are additionally counted as quote-required so nothing silently
+   * disappears.
    */
   for (const rec of input.recommendations) {
     switch (rec.risk.klass) {
@@ -176,6 +192,9 @@ export function computeTotals(input: TotalsInput): ScanTotals {
         break;
     }
   }
+
+  if (typeof input.populationKeepCount === 'number') keepCount = input.populationKeepCount;
+  if (typeof input.populationUnknownCount === 'number') unknownCount = input.populationUnknownCount;
 
   return {
     safeNowAnnualCents,

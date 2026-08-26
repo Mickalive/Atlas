@@ -58,4 +58,31 @@ describe('logger output hygiene', () => {
       infoSpy.mockRestore();
     }
   });
+
+  // SEC-M1 repair: LOG-2 binds at serialization level — the MESSAGE string
+  // gets the same scrubbing as meta values, so interpolated credentials in
+  // future call sites cannot leak verbatim.
+  it('never emits bearer-shaped credentials interpolated into the message itself', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      logger.error('upstream rejected Authorization: Bearer supersecretbearertokenvalue123456 retrying'); // redact-test poison
+      const line = errSpy.mock.calls[0]?.[0] as string;
+      expect(line).toContain('[redacted]');
+      expect(line).not.toContain('supersecretbearertokenvalue');
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('scrubs long opaque token shapes in messages while keeping ordinary prose', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      logger.warn('token=abcdefghijklmnopqrstuvwx failed; user saw error message'); // redact-test poison
+      const line = warnSpy.mock.calls[0]?.[0] as string;
+      expect(line).not.toContain('abcdefghijklmnopqrstuvwx');
+      expect(line).toContain('user saw error message');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });

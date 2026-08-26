@@ -38,7 +38,13 @@ export interface Logger {
 }
 
 function emit(level: 'info' | 'warn' | 'error', message: string, meta?: Record<string, unknown>): void {
-  const safeMessage = typeof message === 'string' ? message.replace(/[\r\n]/g, ' ') : '[non-string message]';
+  // SEC-M1: the MESSAGE string gets the same bearer/credential scrubbing as
+  // meta values — interpolated secrets in future call sites must not leak
+  // verbatim (LOG-2 binds at serialization level).
+  const safeMessage =
+    typeof message === 'string'
+      ? message.replace(/[\r\n]/g, ' ').replace(BEARER_LIKE_RE, '[redacted]')
+      : '[non-string message]';
   const payload = {
     level,
     msg: safeMessage,

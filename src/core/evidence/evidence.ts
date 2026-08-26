@@ -149,6 +149,31 @@ function mapOrgProductId(raw: string): ProductId | null {
 }
 
 /**
+ * Effective org-side last-active for ONE product, merged by MAX recency
+ * (functional BLOCKER 2): the org-wide `last_active` and the product-specific
+ * `product_access[].last_active` are two observations of "user was active at
+ * T"; the truthful merge for removal risk is the MOST RECENT one. Taking a
+ * positional first match let a stale org-wide copy shadow a fresh
+ * product-specific observation and mint false SAFE_NOW classifications.
+ * Returns null only when neither source observed anything.
+ */
+export function mergedOrgLastActiveForProduct(
+  orgUser: WireOrgUser | null,
+  productId: ProductId,
+): string | null {
+  if (!orgUser || !orgUser.accountId) return null;
+  const candidates: string[] = [];
+  if (orgUser.lastActive) candidates.push(orgUser.lastActive);
+  for (const pa of orgUser.productAccess) {
+    if (pa.productId && pa.lastActive && mapOrgProductId(pa.productId) === productId) {
+      candidates.push(pa.lastActive);
+    }
+  }
+  if (candidates.length === 0) return null;
+  return candidates.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
+}
+
+/**
  * Build per user x product evidence for one account.
  * `sweepSemantics`: whether each product's negative sweep actually drained.
  */

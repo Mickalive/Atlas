@@ -49,12 +49,15 @@ function isoOrNull(v: unknown): string | null {
   return Number.isFinite(t) ? new Date(t).toISOString() : null;
 }
 
-function emailHint(v: unknown): string | null {
+/**
+ * Local-part-only hint (SEC-3/SEC-L2): the domain adds nothing defensible to
+ * storage, so it is dropped at the adapter boundary. Only the lowercased
+ * local part survives for the service-account marker heuristic.
+ */
+export function emailHint(v: unknown): string | null {
   const s = str(v);
   if (!s || !s.includes('@')) return null;
-  // Keep only a sanitized hint; full addresses are not stored (SEC-3).
-  const [local, domain] = s.split('@');
-  return `${local.toLowerCase()}@${domain.toLowerCase()}`;
+  return s.split('@')[0].toLowerCase();
 }
 
 function accountIdOf(v: unknown): string | null {
@@ -121,26 +124,54 @@ function headerOf(response: RawTransportResponseLike, nameLower: string): string
 
 // ---------------------------------------------------------------------------
 // Body adapters
+//
+// SINGLE PARSE SOURCE (FORGE_PARITY_MODE adapter rule, functional BLOCKER 1,
+// SEC-M3): every item-level mapping lives in a parse*Item function and BOTH
+// gateway implementations route through them. Inline parsing in a transport is
+// a parity violation by definition.
 // ---------------------------------------------------------------------------
+
+export function parseWireUserItem(raw: unknown): WireUser {
+  const r = asRecord(raw) ?? {};
+  return {
+    accountId: str(r.accountId),
+    displayName: str(r.displayName),
+    active: boolOrNull(r.active),
+    emailHint: emailHint(r.emailAddress),
+    accountType: str(r.accountType),
+    createdDate: isoOrNull(r.createdDate),
+  };
+}
+
+export function parseWireGroupItem(raw: unknown): WireGroup {
+  const r = asRecord(raw) ?? {};
+  return { groupId: str(r.groupId) ?? str(r.id), groupName: str(r.name) };
+}
+
+/**
+ * Confluence group-member rows wrap the user either inline or under `account`
+ * (both shapes seen across wiki REST versions); email may surface as
+ * `emailAddress` or `email`. Field extraction stays here — and only here.
+ */
+export function parseWireConfluenceMemberItem(raw: unknown): WireUser {
+  const r = asRecord(raw) ?? {};
+  const account = asRecord(r.account) ?? r;
+  return {
+    accountId: str(account.accountId),
+    displayName: str(account.displayName),
+    active: boolOrNull(account.active),
+    emailHint: emailHint(account.emailAddress) ?? emailHint(account.email),
+    accountType: str(account.type),
+    createdDate: null,
+  };
+}
 
 export function parseWireUsers(json: unknown): { values: WireUser[] } | null {
   const rec = asRecord(json);
   if (!rec) return null;
   const arr = Array.isArray(rec.values) ? rec.values : Array.isArray(json) ? json : null;
   if (!arr) return null;
-  return {
-    values: arr.map((u) => {
-      const r = asRecord(u) ?? {};
-      return {
-        accountId: str(r.accountId),
-        displayName: str(r.displayName),
-        active: boolOrNull(r.active),
-        emailHint: emailHint(r.emailAddress),
-        accountType: str(r.accountType),
-        createdDate: isoOrNull(r.createdDate),
-      };
-    }),
-  };
+  return { values: arr.map(parseWireUserItem) };
 }
 
 export function parseWireGroups(json: unknown): { values: WireGroup[] } | null {
@@ -148,12 +179,7 @@ export function parseWireGroups(json: unknown): { values: WireGroup[] } | null {
   if (!rec) return null;
   const arr = Array.isArray(rec.values) ? rec.values : null;
   if (!arr) return null;
-  return {
-    values: arr.map((g) => {
-      const r = asRecord(g) ?? {};
-      return { groupId: str(r.groupId) ?? str(r.id), groupName: str(r.name) };
-    }),
-  };
+  return { values: arr.map(parseWireGroupItem) };
 }
 
 export function parseWireGroupMembers(json: unknown): { values: WireUser[] } | null {
@@ -161,19 +187,7 @@ export function parseWireGroupMembers(json: unknown): { values: WireUser[] } | n
   if (!rec) return null;
   const arr = Array.isArray(rec.values) ? rec.values : null;
   if (!arr) return null;
-  return {
-    values: arr.map((u) => {
-      const r = asRecord(u) ?? {};
-      return {
-        accountId: str(r.accountId),
-        displayName: str(r.displayName),
-        active: boolOrNull(r.active),
-        emailHint: emailHint(r.emailAddress),
-        accountType: str(r.accountType),
-        createdDate: isoOrNull(r.createdDate),
-      };
-    }),
-  };
+  return { values: arr.map(parseWireUserItem) };
 }
 
 export function parseWireApplicationRoles(json: unknown): WireApplicationRole[] | null {
@@ -219,24 +233,45 @@ export function parseWireSeatCount(json: unknown): WireSeatCount | null {
   };
 }
 
+/** Identity extraction tolerant of string ids and user-object values. */
+export function parseWireIssueActivityItem(raw: unknown): WireIssueActivityHit {
+  const r = asRecord(raw) ?? {};
+  const fields = asRecord(r.fields) ?? {};
+  return {
+    issueKey: str(r.key) ?? str(r.id),
+    updated: isoOrNull(fields.updated),
+    created: isoOrNull(fields.created),
+    creatorAccountId: accountIdOf(fields.creator),
+    assigneeAccountId: accountIdOf(fields.assignee),
+    reporterAccountId: accountIdOf(fields.reporter),
+  };
+}
+
 export function parseWireIssueActivity(json: unknown): { values: WireIssueActivityHit[] } | null {
   const rec = asRecord(json);
   if (!rec) return null;
   const arr = Array.isArray(rec.issues) ? rec.issues : null;
   if (!arr) return null;
+  return { values: arr.map(parseWireIssueActivityItem) };
+}
+
+/**
+ * One Confluence search result row -> WireContributionHit.
+ * The CQL is window-filtered by construction, so a returned hit with a
+ * parseable `version.when` IS within-window activity; the timestamp must be
+ * preserved (functional BLOCKER 1). Rows without any usable temporal field
+ * keep lastModified=null and are handled downstream as unverifiable, never as
+ * measured absence.
+ */
+export function parseWireContributionItem(raw: unknown): WireContributionHit {
+  const r = asRecord(raw) ?? {};
+  const content = asRecord(r.content) ?? {};
+  const version = asRecord(r.version) ?? {};
   return {
-    values: arr.map((i) => {
-      const r = asRecord(i) ?? {};
-      const fields = asRecord(r.fields) ?? {};
-      return {
-        issueKey: str(r.key) ?? str(r.id),
-        updated: isoOrNull(fields.updated),
-        created: isoOrNull(fields.created),
-        creatorAccountId: accountIdOf(fields.creator),
-        assigneeAccountId: accountIdOf(fields.assignee),
-        reporterAccountId: accountIdOf(fields.reporter),
-      };
-    }),
+    contentId: str(content.id),
+    lastModified: isoOrNull(version.when) ?? isoOrNull(r.lastModified),
+    contributorAccountId: accountIdOf(r.contributorAccountIdFallback),
+    creatorAccountId: accountIdOf(content.creatorAccountIdFallback),
   };
 }
 
@@ -245,31 +280,23 @@ export function parseWireContributions(json: unknown): { values: WireContributio
   if (!rec) return null;
   const arr = Array.isArray(rec.results) ? rec.results : null;
   if (!arr) return null;
-  return {
-    values: arr.map((c) => {
-      const r = asRecord(c) ?? {};
-      const content = asRecord(r.content) ?? {};
-      const version = asRecord(r.version) ?? {};
-      return {
-        contentId: str(content.id),
-        lastModified: isoOrNull(version.when) ?? isoOrNull(r.lastModified),
-        contributorAccountId: accountIdOf(r.contributorAccountIdFallback),
-        creatorAccountId: accountIdOf(content.creatorAccountIdFallback),
-      };
-    }),
-  };
+  return { values: arr.map(parseWireContributionItem) };
 }
 
 /**
- * Confluence CQL search does not return per-user contributor accountIds in a
- * stable field; Atlas issues per-user queries (`contributor=accountid:...`),
- * so the hit itself is the evidence and identity fields are tolerated-null.
+ * Per-user CQL queries do not get stable identity fields back in every
+ * response shape; identity is attributed from the query itself. This is the
+ * ONLY place query-derived identity attribution happens.
  */
-export function contributionIdentityFromQuery(cqlAccountId: string): {
-  contributorAccountId: string;
-  creatorAccountId: string | null;
-} {
-  return { contributorAccountId: cqlAccountId, creatorAccountId: cqlAccountId };
+export function attributedContribution(
+  hit: WireContributionHit,
+  cqlAccountId: string,
+): WireContributionHit {
+  return {
+    ...hit,
+    contributorAccountId: hit.contributorAccountId ?? cqlAccountId,
+    creatorAccountId: hit.creatorAccountId ?? cqlAccountId,
+  };
 }
 
 export function parseWireOrgUsers(json: unknown): { values: WireOrgUser[] } | null {

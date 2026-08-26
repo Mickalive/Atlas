@@ -70,6 +70,17 @@ describe('FIX-2/FIX-3 provenance stamping and non-live banner', () => {
     expect(vm.showNonLiveBanner).toBe(false);
     expect(vm.scanStatusLine).toContain('dataMode=LIVE');
   });
+
+  // SEC-M2 repair: provenance fails CLOSED. A missing/corrupted stamp is not
+  // proof of live origin and must render the non-live banner.
+  it('a MISSING/corrupted dataMode stamp renders the non-live banner (fail-closed)', async () => {
+    const report = await runDefault();
+    const corrupted: FinalReport = structuredClone(report);
+    (corrupted as unknown as Record<string, unknown>).dataMode = undefined;
+    const vm = buildDashboardViewModel(corrupted);
+    expect(vm.showNonLiveBanner).toBe(true);
+    expect(vm.nonLiveBannerText).toMatch(/UNVERIFIED DATA PROVENANCE/);
+  });
 });
 
 describe('FIX-4 export stamping and honesty blocks (AC9/AC13)', () => {

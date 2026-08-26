@@ -72,6 +72,13 @@ export interface ClassificationResult {
    * money counted once per product regardless of group redundancy).
    */
   reclaimableProducts: ProductId[];
+  /**
+   * Products where inactivity/activity was actually MEASURED on an Atlas
+   * surface (positive observations or drained negative sweeps) — as opposed
+   * to seats that ride along on the account-level classification without
+   * product-specific evidence (functional MEDIUM 7 honesty labeling).
+   */
+  corroboratedProducts: ProductId[];
 }
 
 function daysBetween(isoA: string, isoB: string): number | null {
@@ -202,6 +209,8 @@ export function classifyAccount(input: ClassificationInput): ClassificationResul
       );
     }
 
+    const sweepProductIds = [...new Set(sweeps.map((e) => e.productId))];
+
     if (isProtected) {
       return result(
         'REVIEW',
@@ -210,6 +219,7 @@ export function classifyAccount(input: ClassificationInput): ClassificationResul
         'Full-window sweeps found zero contributions, but the account matches a protected class (admin/service/exception). Protected accounts are structurally barred from SAFE_NOW.',
         [...checks, ...protectedHits],
         [],
+        sweepProductIds,
       );
     }
 
@@ -227,6 +237,7 @@ export function classifyAccount(input: ClassificationInput): ClassificationResul
           ...protectedHits,
         ],
         [...billableProducts],
+        sweepProductIds,
       );
     }
 
@@ -237,6 +248,7 @@ export function classifyAccount(input: ClassificationInput): ClassificationResul
       'Absence was measured on exactly one product surface. A second independent surface is required before SAFE_NOW is possible.',
       [...checks, ...protectedHits, { check: 'CORROBORATION_RULE', result: 'FAIL', detail: 'only one drained sweep' }],
       [...billableProducts],
+      sweepProductIds,
     );
   }
 
@@ -284,6 +296,11 @@ export function classifyAccount(input: ClassificationInput): ClassificationResul
       e.signals.some((s) => s.kind.startsWith('NEGATIVE_SWEEP')),
   );
   const corroboratingSurfaceCount = staleSurfaces.size + negativeOnlySurfaces.length;
+  // Every surface whose evidence was actually measured (stale positives or
+  // drained absence), regardless of how many surfaces corroboration required.
+  const measuredSurfaceIds = [
+    ...new Set([...staleSurfaces, ...negativeOnlySurfaces.map((e) => e.productId)]),
+  ];
 
   const strongCorroboration =
     (orgStrong && stalest.length > 0 && stalest.every((s) => s.days >= th.reviewAfterDays)) ||
@@ -302,6 +319,7 @@ export function classifyAccount(input: ClassificationInput): ClassificationResul
         ...protectedHits,
       ],
       [...billableProducts],
+      measuredSurfaceIds,
     );
   }
 
@@ -312,6 +330,7 @@ export function classifyAccount(input: ClassificationInput): ClassificationResul
     'One product surface shows long inactivity. Per policy, 90+ day inactivity alone reaches at most REVIEW pending corroboration.',
     [...checks, ...protectedHits, { check: 'CORROBORATION_RULE', result: 'FAIL', detail: 'single stale surface' }],
     [...billableProducts],
+    measuredSurfaceIds,
   );
 }
 
@@ -322,6 +341,7 @@ function result(
   detail: string,
   checks: DependencyCheck[],
   reclaimableProducts: ProductId[],
+  corroboratedProducts: ProductId[] = [],
 ): ClassificationResult {
-  return { klass, ruleId, thresholdSummary, detail, checks, reclaimableProducts };
+  return { klass, ruleId, thresholdSummary, detail, checks, reclaimableProducts, corroboratedProducts };
 }
