@@ -12,55 +12,58 @@ Every OpenCode session is governed by:
 
 The OpenCode wrapper verifies a one-to-one mapping between `.opencode/agents/*.md` and canonical cards and restores protected control-plane files after every agent run. An autonomous product agent therefore cannot silently rewrite its own role, the master prompt, Forge parity rules or CI workflows.
 
-`control-plane-check.sh` machine-checks the invariants that previously caused real failures: no blind factory cron, five-minute watchdog cadence, exact Ox transient signatures, one retrying installer path, valid continuation state, exact agent-card mapping, missing-Forge-app registration handling, and candidate publication only after successful release gates.
+Two independent deterministic checks protect the orchestration layer: `.github/scripts/control-plane-check.sh` validates shell-level continuity invariants before every factory cycle, and `scripts/control-workflow-gates.mjs` parses the GitHub workflow YAML and checks the non-stopping contract as part of normal product lint/build.
 
 ## Lanes
 
 Three independent architects run in parallel after the control-plane guard: API feasibility, market/product, security/test. One Builder owns implementation. Two independent red teams attack the same snapshot. One Release Integrator performs the only repair/integration pass.
 
-## Continuity
+## Continuity: Marketplace ready or keep moving
 
-`state/factory_direction.json` is accepted machine-readable continuation state.
+`state/factory_direction.json` is the accepted machine-readable product state. `MARKETPLACE_READY` is the **only** autonomous stop state.
 
-`Atlas Factory Supervisor` runs after every completed main factory cycle and twice per hour as a dead-man fallback. It is fail-closed: if the accepted state is unreadable or invalid, it dispatches nothing. It dispatches another cycle only when:
-- no Atlas factory run is active;
-- the last factory run succeeded;
-- `continue=true`;
-- a concrete `next_focus` exists;
-- the 24-hour anti-runaway cap has not been reached.
+For every other state — `BUILDING`, `PARITY_READY_AWAITING_CREDENTIALS`, `LIVE_DEV_VERIFIED`, or `BLOCKED_HUMAN` — Atlas is unfinished and must keep `continue=true` with a concrete `next_focus`.
 
-The main product factory has **no direct scheduled cron**. Explicit `workflow_dispatch` and `.factory/KICKOFF` pushes can start it; autonomous continuation belongs only to the state-aware Supervisor. This prevents a release already marked `continue=false` from waking up six hours later and burning another autonomous cycle.
+`Atlas Factory Continuity Supervisor` runs after every completed product-factory cycle and every five minutes. Its job is not to decide whether Atlas deserves another cycle; unfinished Atlas always does. It checks for an already-active factory, self-heals missing/corrupt/prematurely stopped continuation state, gives the watchdog one short local-recovery window after a failure, and otherwise dispatches a fresh cycle from `main`.
+
+There is no daily cycle cap. Exhausting a local retry budget is not a global stop condition.
+
+The main product factory itself has no scheduled cron. This avoids duplicate long-running factories while leaving continuity to the dedicated five-minute supervisor.
 
 ## Ox / runner recovery
 
-`Atlas Ox and Runner Watchdog` runs after every factory completion and every five minutes. It retries only explicit infrastructure failures and never masks deterministic product/test failures.
+`Atlas Ox and Runner Watchdog` runs after factory completion and every five minutes. The in-job wrapper first retries transient provider/network failures. Its signature set includes the actual Atlas failures (`Unexpected server error`, `Upstream request failed`, `Endpoint is unavailable`, `UnknownError`) plus HTTP 429/5xx and normal network/runner failures. OpenCode installation has its own retry helper as well.
 
-The in-job OpenCode wrapper retries transient provider/network errors before failing the job. Its signature set includes the actual failures observed in Atlas (`Unexpected server error`, `Upstream request failed`, `Endpoint is unavailable`, `UnknownError`) in addition to HTTP 429/5xx and normal network/runner failures. Exhaustion emits a stable `ATLAS_TRANSIENT_OX_EXHAUSTED` marker.
-
-OpenCode installation also goes through one retrying helper. Exhaustion emits `ATLAS_TRANSIENT_OX_INSTALL_EXHAUSTED`, which the Watchdog recognizes.
-
-The Watchdog caps GitHub-level reruns at three attempts. It will not resurrect an old autonomous scheduled failure when `main` already says `continue=false`; explicit human-triggered runs remain recoverable.
+A single failed GitHub run is retried only a bounded number of times so deterministic defects are not hidden forever. When those local attempts are exhausted, continuity moves to a **fresh factory cycle**, not to a stopped product. Deterministic test/product failures are repaired by a fresh cycle rather than blindly replayed forever.
 
 ## Deterministic main audit
 
 `Atlas Main Deterministic Audit` is independent of Ox. On relevant pushes to `main` it runs:
-- control-plane invariants;
+- parsed control-plane/workflow invariants;
 - `npm ci`;
-- unit/integration tests;
-- typecheck;
-- static gates;
+- 127+ unit/integration and false-positive tests;
+- backend TypeScript typecheck;
+- UI Kit JSX typecheck;
+- static Forge/security gates;
+- `npm audit --audit-level=high` (moderate advisories remain visible; high/critical fail);
 - build gate;
 - the isolated Forge parity container (Node 24, 512 MB, network disabled).
 
 This gives product truth even when the free Ox provider is unavailable.
 
-## Forge live gate
+## Forge parity and authenticated validation
 
-Until credentials are connected, candidates must pass `docs/FORGE_PARITY_MODE.md` and the Node 24 / 512 MB network-isolated parity container.
+Current Forge CLI releases require an authenticated Forge identity for `forge lint`. The network-isolated parity container therefore validates deterministic local invariants only and does **not** pretend an unauthenticated CLI lint is possible.
 
-Once credentials exist, the final gate requires Forge credentials **and a real `ATLASSIAN_SITE`** before it claims live success. If `manifest.yml` has no registered Forge app id, the gate runs `forge register` using `FORGE_DEVELOPER_SPACE_ID`; it then runs authenticated `forge lint`, development deploy and Jira install. Only after all three succeed does `state/factory_direction.json` advance to `LIVE_DEV_VERIFIED`. Optional Organization API smoke tests remain separate and must not fabricate production support.
+When `FORGE_EMAIL` and `FORGE_API_TOKEN` exist and the app is registered, main CI runs authenticated `forge lint`. The product factory live gate additionally owns registration of an unregistered app via `FORGE_DEVELOPER_SPACE_ID`, authenticated lint, development deploy, and Jira installation on `ATLASSIAN_SITE`.
 
-A failed Release Integrator can no longer overwrite the canonical `factory/<run>/candidate` branch: that branch is persisted only after the hard host and Forge parity gates succeed.
+Missing live credentials are a blocker for live verification, not permission to stop offline hardening. The supervisor keeps Atlas moving and re-checking that blocker every cycle.
+
+## Release safety
+
+A failed Release Integrator cannot overwrite the canonical candidate branch: `factory/<run>/candidate` is persisted only after hard host/parity gates succeed.
+
+`MARKETPLACE_READY` is valid only after live verification, no unresolved release blocker, and completion of release/security/privacy/Marketplace packaging. Only then may `continue=false` stop the autonomous chain.
 
 ## Anti-usine-à-gaz rules
 
@@ -70,4 +73,4 @@ A failed Release Integrator can no longer overwrite the canonical `factory/<run>
 - Auditors cannot mutate the candidate they judge.
 - One Integrator fixes/tests/chooses the candidate.
 - Control-plane evolution is human-owned.
-- A new autonomous cycle must have a concrete product-relevant next focus.
+- Every unfinished cycle must have a concrete product-relevant next focus.
