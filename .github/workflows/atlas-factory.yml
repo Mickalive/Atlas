@@ -6,7 +6,7 @@ on:
     paths:
       - '.factory/KICKOFF'
   schedule:
-    - cron: '23 */3 * * *'
+    - cron: '23 */6 * * *'
 
 permissions:
   contents: write
@@ -33,7 +33,7 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Research current Atlassian API feasibility
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent api_architect "Produce the binding API feasibility map for the current Atlas V1. Verify current official Atlassian docs on the network; do not rely on stale memory. Respect docs/FORGE_PARITY_MODE.md: until credentials exist, design a real Forge gateway plus deterministic fixture gateway with identical downstream semantics."
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent api_architect "Produce the binding API feasibility map for the current Atlas V1. Verify current official Atlassian docs on the network; do not rely on stale memory. Respect docs/FORGE_PARITY_MODE.md and the canonical Atlas control plane."
       - name: Persist lane
         run: |
           git config user.name atlas-api-architect
@@ -52,7 +52,7 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Freeze sellable V1
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent market_product_architect "Research the current Atlassian Marketplace and freeze the narrowest sellable V1. Recoup and current license optimizers are real competitors. Fixture/demo mode must be visibly non-live and cannot alter the actual product logic."
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent market_product_architect "Research the current Atlassian Marketplace and freeze the narrowest sellable V1. Recoup and current license optimizers are real competitors. Fixture/demo mode must be visibly non-live and cannot alter actual product logic."
       - name: Persist lane
         run: |
           git config user.name atlas-product-architect
@@ -71,7 +71,7 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Design adversarial safety gates
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent security_test_architect "Define the least-privilege security model and false-positive test matrix for a real Marketplace release. Treat fixture/live separation, tenant isolation, partial scans and the Forge parity constraints as release-critical."
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent security_test_architect "Define the least-privilege security model and false-positive test matrix for a real Marketplace release. Treat fixture/live separation, tenant isolation, partial scans and Forge parity constraints as release-critical."
       - name: Persist lane
         run: |
           git config user.name atlas-security-architect
@@ -100,8 +100,9 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Build real Forge V1
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent implementation_builder "Build the actual Atlas V1 now. API=/tmp/atlas_api/docs/API_FEASIBILITY.md Product=/tmp/atlas_product/docs/PRODUCT_V1.md Security=/tmp/atlas_security/docs/SECURITY_TEST_PLAN.md. docs/FORGE_PARITY_MODE.md is binding. Build Forge-compatible production code plus a swappable fixture gateway; do not stop at a plan."
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent implementation_builder "Build the actual Atlas V1 now. API=/tmp/atlas_api/docs/API_FEASIBILITY.md Product=/tmp/atlas_product/docs/PRODUCT_V1.md Security=/tmp/atlas_security/docs/SECURITY_TEST_PLAN.md. docs/FORGE_PARITY_MODE.md and the canonical control plane are binding. Build Forge-compatible production code plus a swappable fixture gateway; do not stop at a plan."
       - name: Run host tests
+        continue-on-error: true
         shell: bash
         run: |
           if [[ -f package.json ]]; then
@@ -111,10 +112,11 @@ jobs:
             npm run lint --if-present
             npm run build --if-present
           fi
-      - name: Forge parity container gate
+      - name: Forge parity container diagnostic
+        continue-on-error: true
         shell: bash
         run: bash .github/scripts/forge-parity-check.sh
-      - name: Persist build
+      - name: Persist build for independent attack
         if: always()
         run: |
           git config user.name atlas-builder
@@ -125,6 +127,7 @@ jobs:
   functional_redteam:
     name: FUNCTIONAL RED TEAM
     needs: [builder]
+    if: always() && needs.builder.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -151,6 +154,7 @@ jobs:
   security_redteam:
     name: SECURITY RED TEAM
     needs: [builder, security_architect]
+    if: always() && needs.builder.result != 'cancelled' && needs.security_architect.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -179,6 +183,7 @@ jobs:
   integrator:
     name: RELEASE INTEGRATOR
     needs: [functional_redteam, security_redteam]
+    if: always() && needs.functional_redteam.result == 'success' && needs.security_redteam.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -198,7 +203,16 @@ jobs:
       - name: Install OpenCode
         run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
       - name: Repair and integrate
-        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent release_integrator "Repair the build using /tmp/atlas_functional-audit/audit/FUNCTIONAL.md and /tmp/atlas_security-audit/audit/SECURITY.md. docs/FORGE_PARITY_MODE.md is binding. Produce one release candidate and docs/RELEASE_STATUS.md."
+        run: .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent release_integrator "Repair the build using /tmp/atlas_functional-audit/audit/FUNCTIONAL.md and /tmp/atlas_security-audit/audit/SECURITY.md. Produce one release candidate, docs/RELEASE_STATUS.md and state/factory_direction.json. Do not stop until the parity gates pass or an explicit honest blocker remains."
+      - name: Validate continuation contract
+        shell: bash
+        run: |
+          test -f state/factory_direction.json || { echo '::error::Missing state/factory_direction.json'; exit 1; }
+          jq -e '.release_status and (.continue|type=="boolean") and .reason and .next_focus and .updated_at' state/factory_direction.json >/dev/null
+          jq -e '.release_status=="BUILDING" or .release_status=="PARITY_READY_AWAITING_CREDENTIALS" or .release_status=="LIVE_DEV_VERIFIED" or .release_status=="MARKETPLACE_READY" or .release_status=="BLOCKED_HUMAN"' state/factory_direction.json >/dev/null
+          if [[ "$(jq -r '.continue' state/factory_direction.json)" == true ]]; then
+            test -n "$(jq -r '.next_focus // empty' state/factory_direction.json)" || { echo '::error::continue=true requires next_focus'; exit 1; }
+          fi
       - name: Hard host gate
         shell: bash
         run: |
@@ -213,6 +227,7 @@ jobs:
         shell: bash
         run: bash .github/scripts/forge-parity-check.sh
       - name: Persist candidate
+        if: always()
         run: |
           git config user.name atlas-release-integrator
           git config user.email atlas-release-integrator@autonomous.local
@@ -222,6 +237,7 @@ jobs:
   forge_release_gate:
     name: FORGE LIVE GATE + MAIN
     needs: [integrator]
+    if: needs.integrator.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -248,7 +264,11 @@ jobs:
         run: |
           if [[ -z "$FORGE_EMAIL" || -z "$FORGE_API_TOKEN" ]]; then
             echo 'FORGE_LIVE_GATE=SKIPPED_MISSING_FORGE_CREDENTIALS'
-            echo 'Candidate is promoted on strict local Forge parity only.'
+            if [[ "$(jq -r '.release_status' state/factory_direction.json)" == 'PARITY_READY_AWAITING_CREDENTIALS' ]]; then
+              tmp=$(mktemp)
+              jq '.continue=false | .reason="Forge-parity candidate accepted; waiting for live Atlassian credentials." | .next_focus="Connect Forge/Atlassian credentials and run the live gate."' state/factory_direction.json > "$tmp"
+              mv "$tmp" state/factory_direction.json
+            fi
             exit 0
           fi
 
@@ -272,7 +292,6 @@ jobs:
           else
             echo 'FORGE_INSTALL=SKIPPED_MISSING_ATLASSIAN_SITE'
           fi
-
       - name: Optional live Organizations API smoke test
         shell: bash
         run: |
@@ -286,12 +305,12 @@ jobs:
             "https://api.atlassian.com/admin/v1/orgs/$ATLASSIAN_ORG_ID/users")
           test "$code" = '200' || { echo "::error::Organizations API smoke failed HTTP $code"; cat /tmp/org-users.json; exit 1; }
           node -e "const x=require('/tmp/org-users.json'); if(!Array.isArray(x.data)) process.exit(1); console.log('ORG_API_USERS='+x.data.length)"
-      - name: Commit Forge registration if manifest changed
+      - name: Commit release state / Forge registration changes
         run: |
           git config user.name atlas-forge-release
           git config user.email atlas-forge-release@autonomous.local
-          git add manifest.yml docs/RELEASE_STATUS.md 2>/dev/null || true
-          git commit -m "Forge live gate ${GITHUB_RUN_ID}" || true
+          git add manifest.yml docs/RELEASE_STATUS.md state/factory_direction.json 2>/dev/null || true
+          git commit -m "Forge gate ${GITHUB_RUN_ID}" || true
       - name: Promote verified candidate to main
         run: |
           git fetch origin main
