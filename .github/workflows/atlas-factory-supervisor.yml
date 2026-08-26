@@ -1,0 +1,72 @@
+name: Atlas Factory Supervisor
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Atlas 24h Product Factory"]
+    types: [completed]
+  schedule:
+    - cron: '17,47 * * * *'
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: atlas-factory-supervisor
+  cancel-in-progress: true
+
+jobs:
+  continuity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Continue only from accepted machine state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          WF='atlas-factory.yml'
+          RUNS=$(gh run list --repo "$REPO" --workflow "$WF" --limit 50 --json databaseId,status,conclusion,createdAt 2>/dev/null || echo '[]')
+          ACTIVE=$(jq '[.[] | select(.status != "completed")] | length' <<<"$RUNS")
+          if [[ "$ACTIVE" -gt 0 ]]; then
+            echo 'Atlas factory already active; no duplicate dispatch.'
+            exit 0
+          fi
+
+          CUTOFF=$(date -u -d '24 hours ago' +%s)
+          RECENT=$(jq --argjson c "$CUTOFF" '[.[] | (.createdAt|fromdateiso8601) as $t | select($t >= $c)] | length' <<<"$RUNS" 2>/dev/null || echo 0)
+          if [[ "$RECENT" -ge 16 ]]; then
+            echo '::warning::24h autonomous cycle cap reached; refusing runaway busywork.'
+            exit 0
+          fi
+
+          STATE=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/${REPO}/contents/state/factory_direction.json?ref=main" 2>/dev/null || echo '{}')
+          CONTINUE=$(jq -r '.continue // true' <<<"$STATE" 2>/dev/null || echo true)
+          STATUS=$(jq -r '.release_status // "BUILDING"' <<<"$STATE" 2>/dev/null || echo BUILDING)
+          NEXT=$(jq -r '.next_focus // empty' <<<"$STATE" 2>/dev/null || true)
+
+          LATEST=$(jq '[.[] | select(.status=="completed")] | sort_by(.createdAt) | last // {}' <<<"$RUNS")
+          ID=$(jq -r '.databaseId // empty' <<<"$LATEST")
+          CONCLUSION=$(jq -r '.conclusion // empty' <<<"$LATEST")
+
+          if [[ -z "$ID" ]]; then
+            echo 'No prior factory run; dispatching bootstrap.'
+            gh workflow run "$WF" --repo "$REPO" --ref main
+            exit 0
+          fi
+
+          if [[ "$CONCLUSION" != success ]]; then
+            echo "Latest factory run $ID concluded $CONCLUSION. Watchdog handles infrastructure retries; supervisor will not hide a real failure."
+            exit 0
+          fi
+
+          if [[ "$CONTINUE" == true ]]; then
+            [[ -n "$NEXT" ]] || { echo '::error::continue=true without next_focus; refusing blind loop.'; exit 1; }
+            echo "Continuing Atlas: status=$STATUS next_focus=$NEXT"
+            gh workflow run "$WF" --repo "$REPO" --ref main
+          else
+            echo "Atlas autonomous continuation stopped by accepted state: status=$STATUS"
+          fi
