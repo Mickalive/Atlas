@@ -61,6 +61,7 @@ if (supervisor) {
   if (!supervisor.text.includes('ATLAS_CONTINUITY=DISPATCH_FRESH_CYCLE')) failures.push('supervisor lacks fresh-cycle recovery dispatch');
   if (!supervisor.text.includes('ATLAS_CONTINUITY=STATE_SELF_HEALED')) failures.push('supervisor cannot self-heal prematurely stopped/corrupt state');
   if (!supervisor.text.includes('atlas-housekeeping.sh')) failures.push('supervisor no longer invokes canonical Actions housekeeping');
+  if (!supervisor.text.includes('dispatch_if_idle')) failures.push('supervisor does not recheck factory activity immediately before dispatch');
   if (/24h autonomous cycle cap|runaway busywork|RECENT.*-ge/i.test(supervisor.text)) failures.push('supervisor contains a run cap that can halt unfinished work');
   if (supervisor.doc?.permissions?.contents !== 'write' || supervisor.doc?.permissions?.actions !== 'write') {
     failures.push('supervisor lacks contents/actions write permissions required for self-heal + dispatch');
@@ -73,7 +74,20 @@ if (watchdog) {
   }
   if (!watchdog.text.includes('ATLAS_WATCHDOG=BACKUP_CONTINUITY_DISPATCH')) failures.push('watchdog lacks independent delayed continuity fallback');
   if (!watchdog.text.includes('dispatching fresh cycle')) failures.push('watchdog local retry exhaustion can become terminal');
+  if (!watchdog.text.includes('dispatch_if_idle')) failures.push('watchdog does not recheck factory activity immediately before dispatch');
   else passes.push('watchdog has bounded retry plus independent fresh-cycle fallback');
+}
+
+if (supervisor && watchdog) {
+  const supervisorGroup = supervisor.doc?.concurrency?.group;
+  const watchdogGroup = watchdog.doc?.concurrency?.group;
+  if (supervisorGroup !== 'atlas-factory-orchestrator' || watchdogGroup !== 'atlas-factory-orchestrator') {
+    failures.push('supervisor/watchdog do not share the orchestration mutex; duplicate factory dispatches can race');
+  } else if (supervisor.doc?.concurrency?.['cancel-in-progress'] !== false || watchdog.doc?.concurrency?.['cancel-in-progress'] !== false) {
+    failures.push('orchestration mutex cancels a recovery controller instead of serializing it');
+  } else {
+    passes.push('supervisor and watchdog share a serialized orchestration mutex');
+  }
 }
 
 if (mainCi) {
