@@ -20,6 +20,15 @@ fi
 node -e "const major=Number(process.versions.node.split('.')[0]); if(major!==24){console.error('Expected Node 24, got '+process.version); process.exit(1)}; console.log('NODE='+process.version)"
 forge --version
 
+# Forge CLI asks for analytics consent on first use even when CI=1. Persist an
+# explicit opt-out before lint so a non-TTY parity run can reach the actual
+# schema/module validator. This command is local and does not require auth.
+forge settings set usage-analytics false >/tmp/forge-settings.log 2>&1 || {
+  cat /tmp/forge-settings.log >&2
+  echo '::error::Unable to disable Forge CLI analytics prompt in parity mode.' >&2
+  exit 1
+}
+
 test -f manifest.yml || { echo 'Missing Forge manifest'; exit 1; }
 test -f package.json || { echo 'Missing package.json'; exit 1; }
 
@@ -46,7 +55,7 @@ fi
 # Local Forge validation is the authoritative pre-deploy schema/module check.
 # Running it in the network-isolated container prevents false confidence from
 # our own hand-written parity assumptions.
-forge lint
+forge lint --non-interactive
 
 npm test --if-present
 npm run typecheck --if-present
