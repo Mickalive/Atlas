@@ -5,8 +5,6 @@ on:
   push:
     paths:
       - '.factory/KICKOFF'
-  schedule:
-    - cron: '23 */6 * * *'
 
 permissions:
   contents: write
@@ -21,8 +19,20 @@ env:
   ATLAS_NODE_VERSION: '24'
 
 jobs:
+  control_plane_guard:
+    name: CONTROL PLANE GUARD
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Validate factory invariants
+        run: bash .github/scripts/control-plane-check.sh
+
   api_architect:
     name: API ARCHITECT
+    needs: [control_plane_guard]
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -32,7 +42,7 @@ jobs:
       - name: Prepare API lane
         run: git switch -C "factory/${GITHUB_RUN_ID}/api"
       - name: Install OpenCode
-        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+        run: bash .github/scripts/install-opencode-with-retry.sh
       - name: Research API feasibility
         shell: bash
         run: |
@@ -50,6 +60,7 @@ jobs:
 
   product_architect:
     name: MARKET / PRODUCT ARCHITECT
+    needs: [control_plane_guard]
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -59,7 +70,7 @@ jobs:
       - name: Prepare Product lane
         run: git switch -C "factory/${GITHUB_RUN_ID}/product"
       - name: Install OpenCode
-        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+        run: bash .github/scripts/install-opencode-with-retry.sh
       - name: Freeze sellable V1
         shell: bash
         run: |
@@ -77,6 +88,7 @@ jobs:
 
   security_architect:
     name: SECURITY / TEST ARCHITECT
+    needs: [control_plane_guard]
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
@@ -86,7 +98,7 @@ jobs:
       - name: Prepare Security lane
         run: git switch -C "factory/${GITHUB_RUN_ID}/security"
       - name: Install OpenCode
-        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+        run: bash .github/scripts/install-opencode-with-retry.sh
       - name: Design safety gates
         shell: bash
         run: |
@@ -127,7 +139,7 @@ jobs:
           cp /tmp/atlas_security/docs/SECURITY_TEST_PLAN.md .factory-inputs/SECURITY_TEST_PLAN.md
           git switch -C "factory/${GITHUB_RUN_ID}/build"
       - name: Install OpenCode
-        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+        run: bash .github/scripts/install-opencode-with-retry.sh
       - name: Build real Forge V1
         shell: bash
         run: |
@@ -182,7 +194,7 @@ jobs:
           git switch -C "factory/${GITHUB_RUN_ID}/functional-audit" "origin/factory/${GITHUB_RUN_ID}/build"
           mkdir -p audit
       - name: Install OpenCode
-        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+        run: bash .github/scripts/install-opencode-with-retry.sh
       - name: Attack correctness
         shell: bash
         run: |
@@ -221,7 +233,7 @@ jobs:
           mkdir -p .factory-inputs audit
           cp /tmp/atlas_security_plan/docs/SECURITY_TEST_PLAN.md .factory-inputs/SECURITY_TEST_PLAN.md
       - name: Install OpenCode
-        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+        run: bash .github/scripts/install-opencode-with-retry.sh
       - name: Attack security and Marketplace readiness
         shell: bash
         run: |
@@ -266,7 +278,7 @@ jobs:
           cp /tmp/atlas_functional-audit/audit/FUNCTIONAL.md .factory-inputs/audits/FUNCTIONAL.md
           cp /tmp/atlas_security-audit/audit/SECURITY.md .factory-inputs/audits/SECURITY.md
       - name: Install OpenCode
-        run: curl --retry 3 --retry-all-errors --retry-delay 10 -fsSL https://opencode.ai/install | bash
+        run: bash .github/scripts/install-opencode-with-retry.sh
       - name: Repair and integrate
         shell: bash
         run: |
@@ -298,10 +310,11 @@ jobs:
       - name: Hard Forge parity gate
         shell: bash
         run: bash .github/scripts/forge-parity-check.sh
-      - name: Persist release candidate
-        if: always()
+      - name: Persist vetted release candidate
+        if: success()
         shell: bash
         run: |
+          rm -rf .factory-inputs
           git config user.name atlas-release-integrator
           git config user.email atlas-release-integrator@autonomous.local
           git add -A
@@ -338,11 +351,11 @@ jobs:
       - name: Forge registration, deploy and install when configured
         shell: bash
         run: |
-          if [[ -z "$FORGE_EMAIL" || -z "$FORGE_API_TOKEN" ]]; then
-            echo 'FORGE_LIVE_GATE=SKIPPED_MISSING_FORGE_CREDENTIALS'
+          if [[ -z "$FORGE_EMAIL" || -z "$FORGE_API_TOKEN" || -z "$ATLASSIAN_SITE" ]]; then
+            echo 'FORGE_LIVE_GATE=SKIPPED_MISSING_FORGE_CREDENTIALS_OR_SITE'
             if [[ "$(jq -r '.release_status' state/factory_direction.json)" == 'PARITY_READY_AWAITING_CREDENTIALS' ]]; then
               tmp=$(mktemp)
-              jq '.continue=false | .reason="Forge-parity candidate accepted; waiting for live Atlassian credentials." | .next_focus="Connect Forge/Atlassian credentials and run the live gate."' state/factory_direction.json > "$tmp"
+              jq '.continue=false | .reason="Forge-parity candidate accepted; waiting for live Forge credentials and an Atlassian development site." | .next_focus="Connect Forge credentials + ATLASSIAN_SITE and run the live gate."' state/factory_direction.json > "$tmp"
               mv "$tmp" state/factory_direction.json
             fi
             exit 0
@@ -352,7 +365,8 @@ jobs:
           forge settings set usage-analytics false || true
           forge whoami
 
-          if grep -Eq 'ari:cloud:ecosystem::app/0{8}-0{4}-0{4}-0{4}-0{12}|ATLAS_PLACEHOLDER' manifest.yml; then
+          if ! grep -Eq '^[[:space:]]+id:[[:space:]]*ari:cloud:ecosystem::app/' manifest.yml || grep -Eq 'ari:cloud:ecosystem::app/0{8}-0{4}-0{4}-0{4}-0{12}|ATLAS_PLACEHOLDER' manifest.yml; then
+            echo 'ATLAS_FORGE_REGISTRATION_REQUIRED'
             if [[ -z "$FORGE_DEVELOPER_SPACE_ID" ]]; then
               echo '::error::Forge app is unregistered and FORGE_DEVELOPER_SPACE_ID is missing.'
               exit 1
@@ -362,12 +376,13 @@ jobs:
 
           forge lint
           forge deploy -e development --non-interactive
+          forge install --site "$ATLASSIAN_SITE" --product Jira -e development --upgrade all --confirm-scopes --non-interactive
 
-          if [[ -n "$ATLASSIAN_SITE" ]]; then
-            forge install --site "$ATLASSIAN_SITE" --product Jira -e development --upgrade all --confirm-scopes --non-interactive
-          else
-            echo 'FORGE_INSTALL=SKIPPED_MISSING_ATLASSIAN_SITE'
-          fi
+          tmp=$(mktemp)
+          now=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          jq --arg now "$now" '.release_status="LIVE_DEV_VERIFIED" | .continue=false | .reason="Authenticated Forge lint, development deploy and Jira install completed successfully." | .next_focus="Run the live-environment scan checklist and manual savings spot-checks before Marketplace release." | .updated_at=$now' state/factory_direction.json > "$tmp"
+          mv "$tmp" state/factory_direction.json
+          echo 'FORGE_LIVE_GATE=PASS'
       - name: Optional live Organizations API smoke test
         shell: bash
         run: |
