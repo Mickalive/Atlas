@@ -51,7 +51,8 @@ echo 'FORGE_AUTHENTICATED_LINT=DEFERRED_TO_AUTHENTICATED_GATE'
 npm test --if-present
 npm run typecheck --if-present
 npm run lint --if-present
-npm run audit:high --if-present
+# npm audit needs registry access and belongs to networked host/release gates,
+# not this deliberately network-isolated parity process.
 npm run build --if-present
 
 if [[ -f docs/FORGE_PARITY_ASSERTIONS.md ]]; then
