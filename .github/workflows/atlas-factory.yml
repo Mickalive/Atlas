@@ -10,6 +10,7 @@ on:
       - 'ATLAS_MASTER_PROMPT.md'
       - 'AGENTS.md'
       - 'docs/agents/AGENT_CARDS.md'
+      - 'state/factory_direction.json'
   schedule:
     - cron: '*/5 * * * *'
 
@@ -26,20 +27,57 @@ env:
   ATLAS_NODE_VERSION: '24'
 
 jobs:
-  factory:
-    name: BUILD AUDIT INTEGRATE ATLAS
+  preflight:
+    name: PREFLIGHT + CLEAN SLATE
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 10
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+      status: ${{ steps.mode.outputs.status }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.ATLAS_NODE_VERSION }}
-          cache: npm
 
-      - name: Read release state and credentials
+      - name: Remove obsolete execution debris
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo 'ATLAS_CLEANUP=START'
+
+          # No historical factory branch participates in the rebuilt design.
+          while read -r _ ref; do
+            [[ -z "${ref:-}" ]] && continue
+            branch="${ref#refs/heads/}"
+            echo "Deleting obsolete branch: $branch"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}" >/dev/null 2>&1 || \
+              echo "::warning::Could not delete obsolete branch $branch"
+          done < <(git ls-remote --heads origin 'refs/heads/factory/*' || true)
+
+          # Disable every historical workflow registration except this one and purge its completed runs.
+          workflows=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows?per_page=100")
+          while read -r workflow_id; do
+            [[ -z "${workflow_id:-}" ]] && continue
+            echo "Disabling obsolete workflow id=$workflow_id"
+            gh api --method PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/disable" >/dev/null 2>&1 || true
+            while read -r run_id; do
+              [[ -z "${run_id:-}" ]] && continue
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >/dev/null 2>&1 || true
+            done < <(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?per_page=100" --jq '.workflow_runs[] | select(.status == "completed") | .id' 2>/dev/null || true)
+          done < <(jq -r '.workflows[] | select(.path != ".github/workflows/atlas-factory.yml") | .id' <<< "$workflows")
+
+          # Keep only a short diagnostic tail of completed runs for the current factory.
+          current_runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/atlas-factory.yml/runs?per_page=100")
+          while read -r old_run; do
+            [[ -z "${old_run:-}" ]] && continue
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/${old_run}" >/dev/null 2>&1 || true
+          done < <(jq -r '[.workflow_runs[] | select(.status == "completed")] | sort_by(.created_at) | reverse | .[12:][]?.id' <<< "$current_runs")
+
+          echo 'ATLAS_CLEANUP=PASS'
+
+      - name: Resolve factory mode
         id: mode
         shell: bash
         env:
@@ -55,118 +93,308 @@ jobs:
               if [[ -n "$FORGE_EMAIL" && -n "$FORGE_API_TOKEN" && -n "$ATLASSIAN_SITE" ]]; then mode=live; else mode=wait; fi
               ;;
             BUILDING|LIVE_DEV_VERIFIED) mode=build ;;
-            BLOCKED_HUMAN) mode=human ;;
+            BLOCKED_HUMAN) mode=wait ;;
             *) echo "::error::Invalid release_status: $status"; exit 64 ;;
           esac
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "status=$status" >> "$GITHUB_OUTPUT"
           echo "ATLAS_MODE=$mode status=$status"
 
-      - name: Stop when Marketplace-ready
-        if: steps.mode.outputs.mode == 'stop'
-        run: echo 'ATLAS_FACTORY=MARKETPLACE_READY'
-      - name: Recheck credentials on next heartbeat
-        if: steps.mode.outputs.mode == 'wait'
-        run: echo 'ATLAS_FACTORY=WAITING_FORGE_CREDENTIALS'
-      - name: Recheck human blocker on next heartbeat
-        if: steps.mode.outputs.mode == 'human'
-        run: echo 'ATLAS_FACTORY=BLOCKED_HUMAN_RECHECK_NEXT_HEARTBEAT'
-
+  market_arch:
+    name: LANE A — MARKET / PRODUCT ARCHITECT
+    needs: preflight
+    if: needs.preflight.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
       - name: Install OpenCode
-        if: steps.mode.outputs.mode == 'build'
         run: bash .github/scripts/install-opencode-with-retry.sh
-      - name: Install product dependencies for agent tests
-        if: steps.mode.outputs.mode == 'build'
-        run: npm ci
-
-      - name: Market and product architecture
-        if: steps.mode.outputs.mode == 'build'
+      - name: Run market/product architect
         shell: bash
         run: |
           .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent market_product_architect \
-            "Work only as the canonical market_product_architect. Read the master prompt, product contract, your card, current product/release state and docs/PRODUCT_V1.md. Inspect the existing Atlas product rather than redesigning it. Update the canonical product/V1 document only where a concrete release or market reality requires it. Preserve the money-first wedge and narrow V1. Do not implement product code or automation."
+            "Work only as market_product_architect. Read the master prompt, product contract, your canonical card, release state and the actual product. Create or update docs/PRODUCT_V1.md as the current canonical narrow, money-first, commercially credible V1 specification. Preserve the existing product rather than redesigning it. Do not implement code or automation."
+      - name: Export only the architecture patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          bad=$(git diff --cached --name-only | grep -Ev '^docs/PRODUCT_V1\.md$' || true)
+          if [[ -n "$bad" ]]; then echo "::error::Market lane modified forbidden paths:"; echo "$bad"; exit 70; fi
+          git diff --cached --binary HEAD > "${RUNNER_TEMP}/market.patch"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-market
+          path: ${{ runner.temp }}/market.patch
+          retention-days: 1
 
-      - name: Atlassian and Forge API architecture
-        if: steps.mode.outputs.mode == 'build'
+  api_arch:
+    name: LANE B — API / FORGE ARCHITECT
+    needs: preflight
+    if: needs.preflight.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install OpenCode
+        run: bash .github/scripts/install-opencode-with-retry.sh
+      - name: Run API architect
         shell: bash
         run: |
           .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent api_architect \
-            "Work only as the canonical api_architect. Read the master prompt, product contract, your card, current product/release state and API feasibility docs. Verify current official Atlassian/Forge documentation whenever a platform fact matters. Update the canonical feasibility/gateway contract only when evidence requires it. Do not implement product code or automation and do not invent unsupported access."
+            "Work only as api_architect. Read the master prompt, product contract, your canonical card, release state, existing API feasibility addendum and actual gateway code. Verify current official Atlassian/Forge documentation whenever a platform fact matters. Create or update docs/API_FEASIBILITY.md and, only if genuinely needed, docs/API_FEASIBILITY_ADDENDUM.md. Do not implement product code or automation and do not invent unsupported access."
+      - name: Export only the architecture patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          bad=$(git diff --cached --name-only | grep -Ev '^docs/API_FEASIBILITY(_ADDENDUM)?\.md$' || true)
+          if [[ -n "$bad" ]]; then echo "::error::API lane modified forbidden paths:"; echo "$bad"; exit 70; fi
+          git diff --cached --binary HEAD > "${RUNNER_TEMP}/api.patch"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-api
+          path: ${{ runner.temp }}/api.patch
+          retention-days: 1
 
-      - name: Security and test architecture
-        if: steps.mode.outputs.mode == 'build'
+  security_arch:
+    name: LANE C — SECURITY / TEST ARCHITECT
+    needs: preflight
+    if: needs.preflight.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install OpenCode
+        run: bash .github/scripts/install-opencode-with-retry.sh
+      - name: Run security/test architect
         shell: bash
         run: |
           .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent security_test_architect \
-            "Work only as the canonical security_test_architect. Read the master prompt, product contract, your card, current implementation, release state and security/test plan. Update executable security, false-positive, tenancy, permission and fixture/live test requirements where needed. Do not implement product code or automation."
+            "Work only as security_test_architect. Read the master prompt, product contract, your canonical card, release state, current tests and implementation. Create or update docs/SECURITY_TEST_PLAN.md with executable false-positive, tenancy, permissions, secret, partial-scan and fixture/live release requirements. Do not implement product code or automation."
+      - name: Export only the architecture patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          bad=$(git diff --cached --name-only | grep -Ev '^docs/SECURITY_TEST_PLAN\.md$' || true)
+          if [[ -n "$bad" ]]; then echo "::error::Security architecture lane modified forbidden paths:"; echo "$bad"; exit 70; fi
+          git diff --cached --binary HEAD > "${RUNNER_TEMP}/security.patch"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-security
+          path: ${{ runner.temp }}/security.patch
+          retention-days: 1
 
-      - name: Build the actual product
-        if: steps.mode.outputs.mode == 'build'
+  builder:
+    name: BUILD — IMPLEMENTATION BUILDER
+    needs: [preflight, market_arch, api_arch, security_arch]
+    if: needs.preflight.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.ATLAS_NODE_VERSION }}
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: arch-*
+          path: ${{ runner.temp }}/architecture
+          merge-multiple: true
+      - name: Apply all architecture lanes
+        shell: bash
+        run: |
+          set -euo pipefail
+          for patch in market.patch api.patch security.patch; do
+            file="${RUNNER_TEMP}/architecture/${patch}"
+            if [[ -s "$file" ]]; then git apply "$file"; fi
+          done
+      - name: Install OpenCode and dependencies
+        run: |
+          bash .github/scripts/install-opencode-with-retry.sh
+          npm ci
+      - name: Build the actual Atlas product
         shell: bash
         run: |
           .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent implementation_builder \
-            "Work only as the canonical implementation_builder. Read the master prompt, product contract, all three canonical architect documents, current release status and state. Implement the concrete next_focus or highest-value remaining release blocker in the real Atlas product. Preserve the existing product invariants and narrow read-only Forge V1. Add or repair regression tests for material behavior. Do not create workflows, agents, branches or handoff layers. Do not stop at analysis."
-
-      - name: Reset audit reports for this exact builder tree
-        if: steps.mode.outputs.mode == 'build'
+            "Work only as implementation_builder. Read the master prompt, product contract, all three canonical architecture documents produced by this run, release status and state. Implement the concrete next_focus and highest-value remaining release blockers in the real Forge product. Preserve SAFE NOW / REVIEW / KEEP / UNKNOWN, conservative savings, read-only V1 and shared fixture/live downstream logic. Add regression coverage. Do not create workflows, branches, handoff layers or speculative scope."
+      - name: Builder smoke gates
+        shell: bash
         run: |
-          mkdir -p audit
+          set -euo pipefail
           rm -f audit/FUNCTIONAL.md audit/SECURITY.md
+          npm ci
+          npm test
+          npm run typecheck
+      - name: Export exact candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          git diff --cached --binary HEAD > "${RUNNER_TEMP}/candidate.patch"
+          test -s "${RUNNER_TEMP}/candidate.patch" || echo 'ATLAS_CANDIDATE=NO_CHANGES'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atlas-candidate
+          path: ${{ runner.temp }}/candidate.patch
+          retention-days: 1
 
-      - name: Independent functional and financial red team
-        if: steps.mode.outputs.mode == 'build'
+  functional_redteam:
+    name: AUDIT LANE 1 — FUNCTIONAL / FINANCIAL RED TEAM
+    needs: [preflight, builder]
+    if: needs.preflight.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.ATLAS_NODE_VERSION }}
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: atlas-candidate
+          path: ${{ runner.temp }}/candidate
+      - name: Materialize exact candidate baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch="${RUNNER_TEMP}/candidate/candidate.patch"
+          if [[ -s "$patch" ]]; then git apply "$patch"; fi
+          git config user.name atlas-audit-baseline
+          git config user.email atlas-audit-baseline@autonomous.local
+          git add -A
+          git commit --allow-empty -m 'Candidate baseline for functional red team'
+      - name: Install OpenCode and dependencies
+        run: |
+          bash .github/scripts/install-opencode-with-retry.sh
+          npm ci
+      - name: Independently attack functional and financial correctness
         shell: bash
         run: |
           .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent functional_redteam \
-            "Audit the exact current builder working tree independently. Try to falsify every SAFE NOW classification and every savings claim; attack missing/partial evidence, pagination, retries, pricing/tier/band math, rounding, identities, fixture/live parity and misleading UX. Do not repair product code. Your only durable write is audit/FUNCTIONAL.md with severity and reproduction evidence."
+            "Audit the exact candidate baseline independently. Try to falsify every SAFE NOW classification and savings claim; attack missing/partial evidence, pagination, retries, pricing/tier/band math, rounding, identities, fixture/live equivalence and misleading UX. Do not repair product code. Your only durable write is audit/FUNCTIONAL.md with severity and reproduction evidence."
+      - name: Enforce auditor independence
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          bad=$(git diff --cached --name-only HEAD | grep -Ev '^audit/FUNCTIONAL\.md$' || true)
+          if [[ -n "$bad" ]]; then echo "::error::Functional red team modified product paths:"; echo "$bad"; exit 71; fi
           test -s audit/FUNCTIONAL.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: functional-audit
+          path: audit/FUNCTIONAL.md
+          retention-days: 1
 
-      - name: Independent security and Marketplace red team
-        if: steps.mode.outputs.mode == 'build'
+  security_redteam:
+    name: AUDIT LANE 2 — SECURITY / MARKETPLACE RED TEAM
+    needs: [preflight, builder]
+    if: needs.preflight.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.ATLAS_NODE_VERSION }}
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: atlas-candidate
+          path: ${{ runner.temp }}/candidate
+      - name: Materialize exact candidate baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch="${RUNNER_TEMP}/candidate/candidate.patch"
+          if [[ -s "$patch" ]]; then git apply "$patch"; fi
+          git config user.name atlas-audit-baseline
+          git config user.email atlas-audit-baseline@autonomous.local
+          git add -A
+          git commit --allow-empty -m 'Candidate baseline for security red team'
+      - name: Install OpenCode and dependencies
+        run: |
+          bash .github/scripts/install-opencode-with-retry.sh
+          npm ci
+      - name: Independently attack security and Marketplace trust
         shell: bash
         run: |
           .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent security_redteam \
-            "Audit the exact current builder working tree independently. Attack scopes, tenancy, auth, storage, secrets, egress, fixture/live separation, concurrency/state safety and Marketplace trust assumptions. Do not repair product code. Your only durable write is audit/SECURITY.md with severity and reproduction evidence."
+            "Audit the exact candidate baseline independently. Attack scopes, tenancy, auth, storage, secrets, egress, fixture/live separation, concurrency/state safety and Marketplace trust assumptions. Do not repair product code. Your only durable write is audit/SECURITY.md with severity and reproduction evidence."
+      - name: Enforce auditor independence
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          bad=$(git diff --cached --name-only HEAD | grep -Ev '^audit/SECURITY\.md$' || true)
+          if [[ -n "$bad" ]]; then echo "::error::Security red team modified product paths:"; echo "$bad"; exit 71; fi
           test -s audit/SECURITY.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: security-audit
+          path: audit/SECURITY.md
+          retention-days: 1
 
-      - name: Integrate audit findings and direct release
-        if: steps.mode.outputs.mode == 'build'
+  integrate:
+    name: RELEASE DIRECTOR — INTEGRATE + FINAL GATES
+    needs: [preflight, builder, functional_redteam, security_redteam]
+    if: needs.preflight.outputs.mode == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.ATLAS_NODE_VERSION }}
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: atlas-candidate
+          path: ${{ runner.temp }}/candidate
+      - uses: actions/download-artifact@v4
+        with:
+          name: functional-audit
+          path: ${{ runner.temp }}/functional
+      - uses: actions/download-artifact@v4
+        with:
+          name: security-audit
+          path: ${{ runner.temp }}/security
+      - name: Materialize candidate and both independent audits
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch="${RUNNER_TEMP}/candidate/candidate.patch"
+          if [[ -s "$patch" ]]; then git apply "$patch"; fi
+          mkdir -p audit
+          cp "${RUNNER_TEMP}/functional/FUNCTIONAL.md" audit/FUNCTIONAL.md
+          cp "${RUNNER_TEMP}/security/SECURITY.md" audit/SECURITY.md
+          sha256sum audit/FUNCTIONAL.md > "${RUNNER_TEMP}/functional.sha"
+          sha256sum audit/SECURITY.md > "${RUNNER_TEMP}/security.sha"
+      - name: Install OpenCode and dependencies
+        run: |
+          bash .github/scripts/install-opencode-with-retry.sh
+          npm ci
+      - name: Release integrator repairs audited candidate
         shell: bash
         run: |
           .github/scripts/run-opencode-with-retry.sh run --model "$ATLAS_MODEL" --agent release_integrator \
-            "Work only as the canonical release_integrator. Read both fresh audit/FUNCTIONAL.md and audit/SECURITY.md plus the master prompt, product contract, release docs and state. Repair BLOCKER/HIGH and other material correctness/security findings with the smallest scoped changes; add regression coverage for material fixes; preserve both audit reports; do not widen V1 or redesign automation. Run relevant gates yourself, then update docs/RELEASE_STATUS.md and state/factory_direction.json honestly. MARKETPLACE_READY is the only final stop state."
-
-      - name: Reinstall exact dependencies after integration
-        if: steps.mode.outputs.mode == 'build'
-        run: npm ci
-      - name: Deterministic release gates
-        if: steps.mode.outputs.mode == 'build'
+            "Work only as release_integrator and release director. Read the exact candidate plus fresh audit/FUNCTIONAL.md and audit/SECURITY.md. Repair BLOCKER/HIGH and other material correctness/security findings with the smallest scoped changes, add regression tests for material fixes, preserve both independent audit reports unchanged, and update docs/RELEASE_STATUS.md plus state/factory_direction.json honestly. Do not widen V1 or redesign automation. MARKETPLACE_READY is the only final stop state."
+      - name: Preserve independent audit evidence
         shell: bash
         run: |
           set -euo pipefail
-          npm test
-          npm run typecheck
-          npm run lint
-          npm run audit:high
-          npm run build
-          bash .github/scripts/forge-parity-check.sh
-
-      - name: Commit only the fully audited gate-clean cycle
-        if: steps.mode.outputs.mode == 'build'
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name atlas-product-factory
-          git config user.email atlas-product-factory@autonomous.local
-          git add -A
-          if git diff --cached --quiet; then echo 'ATLAS_PRODUCT_COMMIT=NO_CHANGES'; exit 0; fi
-          git commit -m "Advance audited Atlas product ${GITHUB_RUN_ID}"
-          git pull --rebase origin main
-          git push origin HEAD:main
-          echo 'ATLAS_PRODUCT_COMMIT=PASS'
-
-      - name: Pre-live deterministic gates
-        if: steps.mode.outputs.mode == 'live'
+          sha256sum -c "${RUNNER_TEMP}/functional.sha"
+          sha256sum -c "${RUNNER_TEMP}/security.sha"
+      - name: Full deterministic release gates
         shell: bash
         run: |
           set -euo pipefail
@@ -178,8 +406,56 @@ jobs:
           npm run build
           bash .github/scripts/forge-parity-check.sh
 
-      - name: Authenticated Forge register lint deploy install
-        if: steps.mode.outputs.mode == 'live'
+          status=$(jq -r '.release_status' state/factory_direction.json)
+          cont=$(jq -r '.continue' state/factory_direction.json)
+          if [[ "$status" == 'MARKETPLACE_READY' && "$cont" != 'false' ]]; then
+            echo '::error::MARKETPLACE_READY requires continue=false'; exit 72
+          fi
+          if [[ "$status" != 'MARKETPLACE_READY' && "$cont" != 'true' ]]; then
+            echo '::error::Unfinished Atlas requires continue=true'; exit 72
+          fi
+      - name: Promote only fully audited gate-clean work to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name atlas-release-director
+          git config user.email atlas-release-director@autonomous.local
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'ATLAS_PROMOTION=NO_CHANGES'
+            exit 0
+          fi
+          git commit -m "Advance audited Atlas product ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo 'ATLAS_PROMOTION=PASS'
+
+  live:
+    name: AUTHENTICATED FORGE LIVE GATE
+    needs: preflight
+    if: needs.preflight.outputs.mode == 'live'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.ATLAS_NODE_VERSION }}
+          cache: npm
+      - name: Pre-live deterministic gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run typecheck
+          npm run lint
+          npm run audit:high
+          npm run build
+          bash .github/scripts/forge-parity-check.sh
+      - name: Register, lint, deploy and install Atlas
         shell: bash
         env:
           FORGE_EMAIL: ${{ secrets.FORGE_EMAIL }}
@@ -191,41 +467,54 @@ jobs:
           npm install -g @forge/cli@latest
           forge settings set usage-analytics false || true
           forge whoami
-          if grep -Eq 'ari:cloud:ecosystem::app/0{8}-0{4}-0{4}-0{4}-0{12}' manifest.yml; then
-            if [[ -z "$FORGE_DEVELOPER_SPACE_ID" ]]; then echo '::error::FORGE_DEVELOPER_SPACE_ID is required to register Atlas.'; exit 65; fi
-            forge register --developer-space-id "$FORGE_DEVELOPER_SPACE_ID" --accept-terms 'Cut My Atlassian Bill'
-          fi
-          forge lint
-          forge deploy -e development --non-interactive
-          forge install --site "$ATLASSIAN_SITE" --product Jira -e development --upgrade all --confirm-scopes --non-interactive
-          now=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-          tmp=$(mktemp)
-          jq --arg now "$now" '.release_status="LIVE_DEV_VERIFIED" | .continue=true | .reason="Authenticated Forge lint, development deploy and Jira install completed. Real-environment verification and Marketplace packaging remain." | .next_focus="Run the complete seven-role cycle against the live-verified release boundary; finish real-environment checks and Marketplace/security/privacy packaging without widening V1 scope." | .updated_at=$now' state/factory_direction.json > "$tmp"
-          mv "$tmp" state/factory_direction.json
+
           git config user.name atlas-forge-release
           git config user.email atlas-forge-release@autonomous.local
-          git add manifest.yml state/factory_direction.json
-          if ! git diff --cached --quiet; then
-            git commit -m "Record Atlas authenticated Forge verification"
+
+          if grep -Eq 'ari:cloud:ecosystem::app/0{8}-0{4}-0{4}-0{4}-0{12}' manifest.yml; then
+            if [[ -z "$FORGE_DEVELOPER_SPACE_ID" ]]; then
+              echo '::error::FORGE_DEVELOPER_SPACE_ID is required to register Atlas.'; exit 65
+            fi
+            forge register --developer-space-id "$FORGE_DEVELOPER_SPACE_ID" --accept-terms 'Cut My Atlassian Bill'
+            git add manifest.yml
+            git commit -m 'Register Atlas Forge app'
             git pull --rebase origin main
             git push origin HEAD:main
           fi
+
+          forge lint
+          forge deploy -e development --non-interactive
+          forge install --site "$ATLASSIAN_SITE" --product Jira -e development --upgrade all --confirm-scopes --non-interactive
+
+          now=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          tmp=$(mktemp)
+          jq --arg now "$now" '.release_status="LIVE_DEV_VERIFIED" | .continue=true | .reason="Authenticated Forge lint, development deploy and Jira install completed. Real-environment verification and Marketplace packaging remain." | .next_focus="Run the full parallel-lane factory against the live-verified boundary; complete real-environment checks and Marketplace/security/privacy packaging." | .updated_at=$now' state/factory_direction.json > "$tmp"
+          mv "$tmp" state/factory_direction.json
+          git add state/factory_direction.json
+          git commit -m 'Record Atlas authenticated Forge verification'
+          git pull --rebase origin main
+          git push origin HEAD:main
           echo 'ATLAS_FORGE_LIVE_GATE=PASS'
 
-      - name: Relaunch the same factory after five minutes while unfinished
-        if: always() && steps.mode.outputs.mode != 'stop'
+  heartbeat:
+    name: RESILIENCE HEARTBEAT — RELAUNCH IF UNFINISHED
+    needs: [preflight, market_arch, api_arch, security_arch, builder, functional_redteam, security_redteam, integrate, live]
+    if: always() && needs.preflight.outputs.mode != 'stop'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Relaunch the same factory after five minutes
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo 'ATLAS_NEXT_HEARTBEAT_WAIT_SECONDS=300'
           sleep 300
-          runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/atlas-factory.yml/runs?per_page=20")
+          runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/atlas-factory.yml/runs?per_page=30")
           active=$(jq --argjson self "$GITHUB_RUN_ID" '[.workflow_runs[] | select((.status == "queued" or .status == "in_progress") and .id != $self)] | length' <<< "$runs")
           if [[ "$active" -gt 0 ]]; then
-            echo "ATLAS_NEXT_HEARTBEAT=ALREADY_PRESENT count=$active"
+            echo "ATLAS_HEARTBEAT=REPLACEMENT_PRESENT count=$active"
             exit 0
           fi
           gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/atlas-factory.yml/dispatches" -f ref=main
-          echo 'ATLAS_NEXT_HEARTBEAT=DISPATCHED'
+          echo 'ATLAS_HEARTBEAT=DISPATCHED'
