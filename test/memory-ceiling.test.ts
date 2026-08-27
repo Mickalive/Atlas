@@ -107,7 +107,7 @@ describe('ADV-5 oversized tenant', () => {
     expect(safeSum).toBe(report.totals.safeNowAnnualCents);
   }, 120_000);
 
-  it('completes quickly enough to fit repeated scheduled chunks', () => {
+  it('ADV-5b: completes quickly enough to fit repeated scheduled chunks', () => {
     const start = Date.now();
     deriveReport(bigSnapshot());
     const elapsed = Date.now() - start;

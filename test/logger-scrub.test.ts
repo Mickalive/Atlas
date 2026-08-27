@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { logger, scrubValue } from '../src/backend/logger';
 
 describe('scrubValue (LOG-2)', () => {
-  it('redacts sensitive keys recursively', () => {
+  it('LOG-2a: redacts sensitive keys recursively', () => {
     const poisoned = {
       authorization: 'Bearer super-secret-token-value', // redact-test poison
       headers: { Authorization: 'Bearer abc', cookie: 'session=x' },
@@ -22,13 +22,13 @@ describe('scrubValue (LOG-2)', () => {
     expect(out.apiKey).toBe('[redacted]');
   });
 
-  it('redacts bearer-shaped string values even under innocent keys', () => {
+  it('LOG-2b: redacts bearer-shaped string values even under innocent keys', () => {
     const out = scrubValue({ note: 'bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload' }) as { note: string };
     expect(out.note).toContain('[redacted]');
     expect(out.note).not.toContain('eyJ');
   });
 
-  it('bounds depth and array size so poisoned payloads cannot flood logs', () => {
+  it('LOG-2c: bounds depth and array size so poisoned payloads cannot flood logs', () => {
     const deep = { a: { b: { c: { d: { e: { f: { g: 'deep' } } } } } } };
     const out = scrubValue(deep, 0) as typeof deep;
     expect(JSON.stringify(out)).toContain('depth-limit');
@@ -38,7 +38,7 @@ describe('scrubValue (LOG-2)', () => {
 });
 
 describe('logger output hygiene', () => {
-  it('never emits raw credentials even when callers leak them in meta', () => {
+  it('LOG-1/LOG-2d: never emits raw credentials even when callers leak them in meta', () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const infoSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {
@@ -62,7 +62,7 @@ describe('logger output hygiene', () => {
   // SEC-M1 repair: LOG-2 binds at serialization level — the MESSAGE string
   // gets the same scrubbing as meta values, so interpolated credentials in
   // future call sites cannot leak verbatim.
-  it('never emits bearer-shaped credentials interpolated into the message itself', () => {
+  it('LOG-2e: never emits bearer-shaped credentials interpolated into the message itself', () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       logger.error('upstream rejected Authorization: Bearer supersecretbearertokenvalue123456 retrying'); // redact-test poison
@@ -74,7 +74,7 @@ describe('logger output hygiene', () => {
     }
   });
 
-  it('scrubs long opaque token shapes in messages while keeping ordinary prose', () => {
+  it('LOG-2f: scrubs long opaque token shapes in messages while keeping ordinary prose', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       logger.warn('token=abcdefghijklmnopqrstuvwx failed; user saw error message'); // redact-test poison

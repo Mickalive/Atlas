@@ -78,8 +78,8 @@ async function runScan(transport: ForgeTransport): Promise<{ report: FinalReport
   return { report: rec.report!, streams: rec.streams as unknown as Record<string, { state: string; reason: string | null }> };
 }
 
-describe('HIGH 3 repair: partial sweeps cannot mint SAFE_NOW money', () => {
-  it('page1 of a declared larger set then HTTP 500 => stale-prefix user UNKNOWN, totals exclude them', async () => {
+describe('HIGH-3 / HIGH-3b repair: partial sweeps cannot mint SAFE_NOW money', () => {
+  it('HIGH-3: page1 of a declared larger set then HTTP 500 => stale-prefix user UNKNOWN, totals exclude them', async () => {
     const { report, streams } = await runScan(
       transportFor(
         {
@@ -113,7 +113,7 @@ describe('HIGH 3 repair: partial sweeps cannot mint SAFE_NOW money', () => {
     expect(report.status).toBe('PARTIAL');
   });
 
-  it('a FULLY drained sweep with the same users books legitimate classifications (control)', async () => {
+  it('HIGH-3b: a FULLY drained sweep with the same users books legitimate classifications (control)', async () => {
     const { report, streams } = await runScan(
       transportFor(
         {

@@ -223,8 +223,8 @@ async function runLiveScan(spec: LiveTenantSpec): Promise<FinalReport> {
   return rec.report;
 }
 
-describe('LIVE-SHAPE PARITY (functional BLOCKER 1 repair)', () => {
-  it('a Confluence contribution 5d ago in production payload shape forces KEEP, never SAFE_NOW', async () => {
+describe('LIVE-SHAPE PARITY (LIVE-SHAPE-1, LIVE-SHAPE-2, LIVE-SHAPE-3; functional BLOCKER 1 repair)', () => {
+  it('LIVE-SHAPE-2: a Confluence contribution 5d ago in production payload shape forces KEEP, never SAFE_NOW', async () => {
     const report = await runLiveScan({
       users: [
         // Carla: authored a Jira issue 100d ago AND contributed to Confluence
@@ -263,7 +263,7 @@ describe('LIVE-SHAPE PARITY (functional BLOCKER 1 repair)', () => {
     expect(report.status).toBe('COMPLETE');
   });
 
-  it('parses raw live payloads through the SAME adapters (no transport-only fields)', async () => {
+  it('LIVE-SHAPE-3: parses raw live payloads through the SAME adapters (no transport-only fields)', async () => {
     // Adapter-level equivalence: the exact raw row shape used above parses to
     // the same Wire DTO the fixture path produces for equivalent reality.
     const { parseWireContributionItem, attributedContribution, parseWireUserItem } = await import('../src/gateway/adapters');

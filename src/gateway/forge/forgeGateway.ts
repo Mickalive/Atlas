@@ -437,6 +437,11 @@ export class ForgeAtlassianGateway implements AtlassianGateway {
     windowStartIso: string,
     cursor: PageCursor,
   ): Promise<GatewayPage<WireContributionHit>> {
+    // SEC-R3: Validate accountId to prevent CQL injection. Atlassian
+    // accountIds are opaque platform-managed identifiers (UUID or similar).
+    if (!/^[a-zA-Z0-9\-_]{1,128}$/.test(cqlAccountId)) {
+      throw new GatewayPageError(400, 'searchConfluenceContributions', null);
+    }
     const cql = `contributor="accountid:${cqlAccountId}" and lastmodified>="${windowStartIso.slice(0, 10)}" order by lastmodified desc`;
     const path = `${ENDPOINTS.confluenceSearch}?cql=${encodeURIComponent(cql)}&cursor=${cursor.cursor ?? ''}&limit=${cursor.pageLimit ?? 25}`;
     const pageOut = await this.page(

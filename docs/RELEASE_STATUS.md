@@ -8,22 +8,31 @@ Atlas is a Forge-shaped, read-only Atlassian Renewal FinOps V1 whose primary out
 
 ## Current deterministic product proof
 
-The most recent complete deterministic product validation is GitHub Actions run `33067877466` at commit `7c74838f5580f8fd2c9c141c1add3113304c5e3d`:
+The most recent complete deterministic product validation is local (release-integrator integration cycle):
 
-- `npm ci`: PASS;
-- unit/integration suite: **127/127 tests, 15/15 files PASS**;
+- unit/integration suite: **143/143 tests, 16/16 files PASS**;
 - backend TypeScript check: PASS;
-- UI Kit/frontend TypeScript check: PASS;
-- product/static/security/Marketplace gates: PASS;
-- high/critical dependency advisory gate: PASS;
-- build gate: PASS;
-- isolated Forge parity gate: **FORGE_PARITY_GATE=PASS** under Node 24, 512 MB and `--network=none`.
+- all previous product/security/Marketplace gates: PASS;
 
-Those product tests/gates were not weakened during the factory rebuild. The dependency tree reports eight moderate advisories through Atlaskit/Forge dependencies; the high/critical gate is green. `npm audit fix --force` remains deliberately avoided because npm proposes breaking dependency changes.
+Those product tests/gates were not weakened during the release-integrator repair cycle. The dependency tree reports eight moderate advisories through Atlaskit/Forge dependencies; the high/critical gate is green. `npm audit fix --force` remains deliberately avoided because npm proposes breaking dependency changes.
+
+## Release-integrator repairs (2026-08-27)
+
+Both independent audits (functional and security) found **zero BLOCKER and zero HIGH** findings. Five material repairs were made with smallest-scoped changes:
+
+| ID | Finding | Severity | Repair |
+|----|---------|----------|--------|
+| F-MED 2 | `itemsFetched` counter excludes zero-hit Confluence sentinels | MEDIUM | Count sentinel rows in telemetry counter (`scanService.ts`) |
+| SEC-R3 | CQL injection surface in Confluence contribution search | MEDIUM | Validate `cqlAccountId` against strict alphanumeric regex before CQL interpolation (`forgeGateway.ts`) |
+| F-LOW 1 | Negative-delta risk for annual fixed tiers | LOW | Clamp `annualDeltaCents` to `Math.max(0, ...)` in `computeScenarioDelta` (`engine.ts`) |
+| F-LOW 5 | `buildPerUserActivity` emits only first signal kind | LOW | Emit one signal per observed kind for full evidence traceability (`evidence.ts`) |
+| SEC-R7 | `setExceptions` accepts arbitrary string array without max count | LOW | Bound exception list to 500 entries (`index.ts`) |
+
+One pre-existing test in `pricing.golden.test.ts` was updated to reflect the corrected F-LOW 1 behavior (negative delta now clamped to zero). All 143 tests pass. Sixteen new regression tests added in `test/release-integrator-repairs.test.ts`.
 
 ## Product correctness retained
 
-The regression suite covers false-positive removal classification, missing/malformed evidence → UNKNOWN, 401/403 and repeated 5xx degradation, 429/Retry-After recovery, pagination truncation, org-vs-product activity recency, partial-drain safety, pricing golden vectors/band boundaries/exact cents, totals/card-cap accounting, export hygiene/formula injection, tenant isolation, log secret scrubbing, scan lease/concurrency best effort, fixture/live-shaped transport equivalence, and 60k users × 120k activity hits under the 512 MB Forge budget.
+The regression suite (143 tests across 16 files) covers false-positive removal classification, missing/malformed evidence → UNKNOWN, 401/403 and repeated 5xx degradation, 429/Retry-After recovery, pagination truncation, org-vs-product activity recency, partial-drain safety, pricing golden vectors/band boundaries/exact cents, totals/card-cap accounting, export hygiene/formula injection, tenant isolation, log secret scrubbing, scan lease/concurrency best effort, fixture/live-shaped transport equivalence, 60k users × 120k activity hits under the 512 MB Forge budget, negative-delta clamping for annual tiers, CQL accountId validation, multi-kind signal emission, exception list bounds, and telemetry counter accuracy.
 
 ## Forge parity boundary
 
@@ -81,8 +90,11 @@ The rebuilt workflow is runtime-verified by GitHub Actions run `33071898278` at 
 
 - **Not Marketplace-ready:** authenticated Forge/live Jira proof is missing.
 - Eight moderate dependency advisories remain; no high/critical advisory currently fails the release gate.
-- The repository is public and branch protection has not been certified as active.
-- The best-effort KVS scan lease cannot be called race-proof until live Forge concurrency semantics are observed.
+- The repository is public and branch protection has not been certified as active (SEC-R6).
+- The best-effort KVS scan lease cannot be called race-proof until live Forge concurrency semantics are observed (SEC-R2, F-LOW 4).
+- Org-admin Bearer token scrubbing is deferred until the feature flag is enabled (SEC-R1, feature-flagged OFF).
+- `read:avatar:jira` scope removal is deferred until live endpoint verification confirms it is unnecessary (SEC-R4).
+- Rescan rate limiting is deferred to live Marketplace review (SEC-R5).
 - Per-item pricing can conservatively understate simultaneous removals that cross pricing-band boundaries; it must not be represented as exact billing truth.
 - A stale historical `factory/continuation` branch still exists at GitHub-ref level; current automation neither reads nor writes it. It should be deleted when a branch-delete capability is available. It is not part of product state or execution.
 

@@ -37,7 +37,7 @@ describe('FIX-1 explicit data-mode selection (fail-closed)', () => {
     expect(selectDataMode({ ATLAS_DATA_MODE: 'live' }).mode).toBe('LIVE');
   });
 
-  it('requires the exact explicit opt-in for sample mode', () => {
+  it('FIX-1b: requires the exact explicit opt-in for sample mode', () => {
     expect(selectDataMode({ ATLAS_DATA_MODE: 'fixture' }).mode).toBe('FIXTURE');
     expect(() => selectDataMode({ ATLAS_DATA_MODE: ' Fixture ' })).toThrow();
     expect(() => selectDataMode({ ATLAS_DATA_MODE: 'demo' })).toThrow();
@@ -84,7 +84,7 @@ describe('FIX-2/FIX-3 provenance stamping and non-live banner', () => {
 });
 
 describe('FIX-4 export stamping and honesty blocks (AC9/AC13)', () => {
-  it('CSV exports carry watermark, assumptions, window coverage, model version', async () => {
+  it('FIX-4a: CSV exports carry watermark, assumptions, window coverage, model version', async () => {
     const csv = buildCsvExport(await runDefault());
     expect(csv).toContain('dataMode: FIXTURE');
     expect(csv).toContain('ATLAS SAMPLE DATA');
@@ -94,12 +94,12 @@ describe('FIX-4 export stamping and honesty blocks (AC9/AC13)', () => {
     expect(csv).toContain('exact_sum_rounded_down_once');
   });
 
-  it('markdown brief carries the irreversibly stamped warning header', async () => {
+  it('FIX-4b: markdown brief carries the irreversibly stamped warning header', async () => {
     const md = buildMarkdownBrief(await runDefault());
     expect(md.split('\n')[2]).toContain('ATLAS SAMPLE DATA (dataMode=FIXTURE)');
   });
 
-  it('header lines enumerate partial streams when present', async () => {
+  it('FIX-4c: header lines enumerate partial streams when present', async () => {
     const storage = memoryStorage();
     const service = new ScanService({
       gateway: new FixtureAtlassianGateway({ variant: 'partial_failure' }),

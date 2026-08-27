@@ -21,7 +21,7 @@ describe('ADV-2 storage key injection', () => {
     }
   });
 
-  it('rejects oversized components', () => {
+  it('ADV-2b: rejects oversized components', () => {
     expect(() => validateKeyComponent('a'.repeat(200), 'record id')).toThrow(InvalidStorageKeyError);
   });
 
@@ -38,7 +38,7 @@ describe('ADV-2 storage key injection', () => {
 });
 
 describe('TEN-2/TEN-4 scoped storage cannot reach another namespace', () => {
-  it('keys are always prefixed with the captured installation id', async () => {
+  it('TEN-4a: keys are always prefixed with the captured installation id', async () => {
     const dump = memoryStorage();
     const tenantA = tenantScopedStorage('install-A', {
       async get(key) {

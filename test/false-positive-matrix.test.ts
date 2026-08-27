@@ -307,19 +307,19 @@ describe('org-admin enrichment (stronger evidence class)', () => {
 // ---------------------------------------------------------------------------
 
 describe('default-scan money integrity', () => {
-  it('safe-now pool equals sum of per-card exact deltas (Jira Standard sourced)', () => {
+  it('M-INT-1: safe-now pool equals sum of per-card exact deltas (Jira Standard sourced)', () => {
     const safeRecs = report.recommendations.filter((r) => r.risk.klass === 'SAFE_NOW');
     const expectedExact = safeRecs.reduce((acc, r) => acc + (r.money?.annualDeltaCents ?? 0), 0);
     expect(expectedExact).toBe(report.totals.safeNowAnnualCents);
     expect(safeRecs.length).toBeGreaterThanOrEqual(3); // Eve, Finn, Quinn
   });
 
-  it('quote-required items are counted and excluded from nothing silently', () => {
+  it('M-INT-2: quote-required items are counted and excluded from nothing silently', () => {
     // Eve/Quinn hold Confluence seats without verified pricing: flagged.
     expect(report.totals.quoteRequiredCount).toBeGreaterThanOrEqual(2);
   });
 
-  it('every money figure traces to model version + effective date + positions', () => {
+  it('M-INT-3: every money figure traces to model version + effective date + positions', () => {
     for (const rec of report.recommendations) {
       if (!rec.money) continue;
       expect(rec.money.pricingModelVersion).toBeTruthy();

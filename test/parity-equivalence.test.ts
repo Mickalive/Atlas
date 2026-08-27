@@ -107,8 +107,8 @@ class ReplayGateway implements AtlassianGateway {
   }
 }
 
-describe('AC10 transport equivalence', () => {
-  it('fixture and replay transports produce identical final reports', async () => {
+describe('ADAPT-1/ADAPT-2 / AC10 transport equivalence', () => {
+  it('ADAPT-1/ADAPT-2: fixture and replay transports produce identical final reports', async () => {
     // Run 1: the fixture transport.
     const fixture = new FixtureAtlassianGateway({ variant: 'default' });
 

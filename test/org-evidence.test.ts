@@ -32,7 +32,7 @@ describe('mergedOrgLastActiveForProduct', () => {
     ],
   };
 
-  it('takes the MAX-recency observation, never a positional first match', () => {
+  it('ORG-M1: takes the MAX-recency observation, never a positional first match', () => {
     expect(mergedOrgLastActiveForProduct(orgUser, 'jira')).toBe(iso(2));
   });
 
@@ -62,7 +62,7 @@ describe('mergedOrgLastActiveForProduct', () => {
   });
 });
 
-describe('BLOCKER 2 end-to-end: fresh product-specific org activity forces KEEP', () => {
+describe('ORG-M2 / BLOCKER 2 end-to-end: fresh product-specific org activity forces KEEP', () => {
   function snapshotWith(orgUser: WireOrgUser | null): AcquisitionSnapshot {
     return {
       scanId: 'scan-org-test',
@@ -121,8 +121,8 @@ describe('BLOCKER 2 end-to-end: fresh product-specific org activity forces KEEP'
  * Direct classifier-level proof of the same rule ordering: the merged signal
  * must reach the conflicting-recent screen BEFORE any staleness corroboration.
  */
-describe('classifier precedence with merged org signals', () => {
-  it('a <90d merged org observation forces KEEP regardless of other stale surfaces', () => {
+describe('ORG-M3 / classifier precedence with merged org signals', () => {
+  it('ORG-M3: a <90d merged org observation forces KEEP regardless of other stale surfaces', () => {
     const window = { windowStartIso: iso(OBSERVATION_WINDOW_DAYS), windowEndIso: NOW };
     const activity = buildPerUserActivity({ issueHits: [], jiraSweepComplete: true, jiraStreamDegraded: null, confluenceHitsByAccount: new Map() });
     const ev = buildUserProductEvidence({

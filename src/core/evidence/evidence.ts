@@ -193,13 +193,16 @@ export function buildUserProductEvidence(input: {
   if (input.productId === 'jira') {
     const obs = perProduct?.get('jira');
     if (obs) {
-      signals.push({
-        kind: [...obs.kinds][0],
-        productId: 'jira',
-        lastObservedAt: obs.lastIso,
-        observedThrough: input.window.windowEndIso,
-        source: [...obs.sources].sort().join('+'),
-      });
+      // F-LOW 5: Emit one signal per observed kind for full evidence traceability.
+      for (const kind of [...obs.kinds].sort()) {
+        signals.push({
+          kind,
+          productId: 'jira',
+          lastObservedAt: obs.lastIso,
+          observedThrough: input.window.windowEndIso,
+          source: [...obs.sources].sort().join('+'),
+        });
+      }
     }
     if (input.activity.jiraSweepComplete) {
       signals.push({

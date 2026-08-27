@@ -40,8 +40,8 @@ describe('Retry-After is honored as a floor (ERR-4)', () => {
   });
 });
 
-describe('backoff ceilings and determinism', () => {
-  it('never exceeds maxDelayMs and stays within jitter bounds', () => {
+describe('backoff ceilings and determinism (ERR-4b, ERR-4c)', () => {
+  it('ERR-4b: never exceeds maxDelayMs and stays within jitter bounds', () => {
     let retried = 0;
     for (let attempt = 1; attempt <= 8; attempt += 1) {
       const d = nextRetryDelay(attempt, { status: 500, headers: {}, json: null }, DEFAULT_PACING, rng);
@@ -55,26 +55,26 @@ describe('backoff ceilings and determinism', () => {
     }
   });
 
-  it('is deterministic under a fixed seed', () => {
+  it('ERR-4c: is deterministic under a fixed seed', () => {
     const a = nextRetryDelay(1, { status: 429, headers: {}, json: null }, DEFAULT_PACING, seededRng(42));
     const b = nextRetryDelay(1, { status: 429, headers: {}, json: null }, DEFAULT_PACING, seededRng(42));
     expect(a.delayMs).toBe(b.delayMs);
   });
 });
 
-describe('retry classification', () => {
-  it('never retries 401/403 (permission-partial instead)', () => {
+describe('retry classification (ERR-1, ERR-2, ERR-3)', () => {
+  it('ERR-1: never retries 401/403 (permission-partial instead)', () => {
     for (const status of [401, 403]) {
       const d = nextRetryDelay(0, { status, headers: {}, json: null }, DEFAULT_PACING, rng);
       expect(d.retry).toBe(false);
     }
   });
 
-  it('never retries other 4xx', () => {
+  it('ERR-2: never retries other 4xx', () => {
     expect(nextRetryDelay(0, { status: 404, headers: {}, json: null }, DEFAULT_PACING, rng).retry).toBe(false);
   });
 
-  it('stops after the attempt ceiling', () => {
+  it('ERR-3: stops after the attempt ceiling', () => {
     const d = nextRetryDelay(DEFAULT_PACING.maxAttempts, { status: 429, headers: {}, json: null }, DEFAULT_PACING, rng);
     expect(d.retry).toBe(false);
   });
@@ -87,14 +87,14 @@ describe('adapter-level malformed preservation (ERR-6)', () => {
     expect(out.malformed).toBe(true);
   });
 
-  it('maps 403 to permission-degraded outcome without value', () => {
+  it('ERR-6b: maps 403 to permission-degraded outcome without value', () => {
     const out = adaptOutcome({ status: 403, headers: {}, json: { values: [] } }, parseWireUsers);
     expect(out.ok).toBe(false);
     expect(out.status).toBe(403);
     expect(out.value).toBeNull();
   });
 
-  it('surfaces rate-limit metadata on 429 envelopes', () => {
+  it('ERR-6c: surfaces rate-limit metadata on 429 envelopes', () => {
     const out = adaptOutcome(
       { status: 429, headers: { 'retry-after': '5', 'ratelimit-reason': 'jira-quota-global-based' }, json: null },
       parseWireUsers,
@@ -122,7 +122,7 @@ describe('production gateway central pacing with injectable transport', () => {
     });
   }
 
-  it('retries 429 honoring Retry-After then succeeds', async () => {
+  it('GATE-5a: retries 429 honoring Retry-After then succeeds', async () => {
     const sleeps: number[] = [];
     const gw = makeGateway(
       [
@@ -138,7 +138,7 @@ describe('production gateway central pacing with injectable transport', () => {
     expect(sleeps[0]).toBeGreaterThanOrEqual(1000); // Retry-After floor respected
   });
 
-  it('exhausts retries on persistent 5xx and returns last outcome (no infinite loop)', async () => {
+  it('GATE-5b: exhausts retries on persistent 5xx and returns last outcome (no infinite loop)', async () => {
     const sleeps: number[] = [];
     const gw = makeGateway([{ status: 503, headers: {}, json: null }], sleeps);
     const out = await gw.getInstanceLicensePlans();
@@ -147,7 +147,7 @@ describe('production gateway central pacing with injectable transport', () => {
     expect(sleeps.length).toBe(DEFAULT_PACING.maxAttempts - 1);
   });
 
-  it('falls back to asUser once after a 401 when interactive fallback is enabled', async () => {
+  it('GATE-5c: falls back to asUser once after a 401 when interactive fallback is enabled', async () => {
     const identities: string[] = [];
     const gw = new ForgeAtlassianGateway({
       userFallback: true,
@@ -170,7 +170,7 @@ describe('production gateway central pacing with injectable transport', () => {
     expect(identities).toEqual(['asApp', 'asUser']);
   });
 
-  it('does NOT fall back to asUser by default (fail-closed identity mode)', async () => {
+  it('GATE-5d: does NOT fall back to asUser by default (fail-closed identity mode)', async () => {
     const identities: string[] = [];
     const gw = new ForgeAtlassianGateway({
       seed: 3,

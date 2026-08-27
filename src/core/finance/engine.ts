@@ -196,7 +196,10 @@ export function computeScenarioDelta(
   }
 
   const monthlyToAnnual = dataset.billingMode === 'MONTHLY_PROGRESSIVE_BANDS' ? 12 : 1;
-  const deltaCents = (beforeCost - afterCost) * monthlyToAnnual;
+  // F-LOW 1: Clamp delta to non-negative. Crossing annual tier boundaries
+  // upward can theoretically make removal cost more; the honest response is
+  // zero savings, not negative savings displayed as loss.
+  const deltaCents = Math.max(0, (beforeCost - afterCost) * monthlyToAnnual);
 
   return {
     annualDeltaCents: deltaCents,

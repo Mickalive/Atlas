@@ -785,7 +785,8 @@ export class ScanService {
         const page = await this.deps.gateway.searchConfluenceContributions(accountId, windowStartFor(rec, this.nowMs), {});
         if (page.values.length > 0) await sink.appendAll(page.values);
         else await sink.appendAll([{ contentId: null, lastModified: null, contributorAccountId: accountId, creatorAccountId: null }]);
-        rec.streams.contributionQueries.itemsFetched += page.values.length;
+        // Count every queried account: hits AND zero-hit sentinels (F-MED 2).
+        rec.streams.contributionQueries.itemsFetched += page.values.length > 0 ? page.values.length : 1;
       } catch (err) {
         hardFailure = err; // permission/rate failures degrade the whole stream once (ERR-3)
         break;

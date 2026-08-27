@@ -15,8 +15,8 @@ function jiraStandard(): PriceDataset {
   return ds;
 }
 
-describe('AC4 golden progressive-band case (frozen)', () => {
-  it('prices 450 Jira Standard monthly seats at exactly $3,175.00/month', () => {
+describe('AC4 golden progressive-band case (FP-24, frozen)', () => {
+  it('FP-24: prices 450 Jira Standard monthly seats at exactly $3,175.00/month', () => {
     const ds = jiraStandard();
     // Full-cost check via zero-removal scenario: before == after => delta 0,
     // so verify the curve directly through a 450 -> 449 comparison pair and
@@ -54,7 +54,7 @@ function monthlyCostFor(ds: PriceDataset, seatsRaw: number): number {
   return Number.NaN;
 }
 
-describe('AC4 boundary crossings (>=10 cases incl. annual tier steps)', () => {
+describe('AC4 boundary crossings (AC4-B, >=10 cases incl. annual tier steps)', () => {
   const ds = jiraStandard();
 
   const boundaryCases: Array<[number, number, string]> = [
@@ -100,7 +100,7 @@ describe('AC4 boundary crossings (>=10 cases incl. annual tier steps)', () => {
     expect(est?.annualDeltaCents).toBe(730 * 12);
   });
 
-  it('never extrapolates beyond the sourced range', () => {
+  it('AC4-NB: never extrapolates beyond the sourced range', () => {
     const est = computeScenarioDelta(ds, { currentBillableSeats: 501, seatsRemoved: 1, todayIso: TODAY });
     expect(est?.bounded).toBe(false);
     expect(est?.annualDeltaCents).toBe(0);
@@ -132,8 +132,9 @@ describe('annual fixed-tier datasets (engine capability)', () => {
   it('detects annual tier-boundary steps', () => {
     const est = computeScenarioDelta(annualDataset, { currentBillableSeats: 105, seatsRemoved: 10, todayIso: TODAY });
     expect(est?.crossings.some((c) => c.description.includes('tier boundary at 100'))).toBe(true);
-    // 95 seats x tier-1 price vs 105 x tier-2 price: savings reflect BOTH rates.
-    expect(est?.annualDeltaCents).toBe(105 * 7_000 - 95 * 8_000);
+    // 95 seats x tier-1 price vs 105 x tier-2 price: removal INCREASES cost
+    // due to upward tier crossing; delta is clamped to 0 (F-LOW 1 repair).
+    expect(est?.annualDeltaCents).toBe(0);
   });
 });
 

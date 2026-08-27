@@ -98,8 +98,8 @@ async function runWith(routes: Route[], maxChunks = 40) {
   return { rec, guard };
 }
 
-describe('HIGH 5 repair: unknown pagination continuation never presents as COMPLETE', () => {
-  it('offset-ignoring responder returning full bare pages => DEGRADED stream + PARTIAL, bounded chunks', async () => {
+describe('HIGH-5a..5d repair: unknown pagination continuation never presents as COMPLETE', () => {
+  it('HIGH-5a: offset-ignoring responder returning full bare pages => DEGRADED stream + PARTIAL, bounded chunks', async () => {
     // Exactly-requested-size page, NO pagination fields anywhere, same content
     // forever: the audit's silent-truncation shape.
     const fullPage = { values: synthUsers(50, 'ghost') };
@@ -111,14 +111,14 @@ describe('HIGH 5 repair: unknown pagination continuation never presents as COMPL
     expect((rec.report as FinalReport).status).toBe('PARTIAL');
   });
 
-  it('a SHORT page against the requested size is evidenced termination => OK + COMPLETE', async () => {
+  it('HIGH-5b: a SHORT page against the requested size is evidenced termination => OK + COMPLETE', async () => {
     const shortPage = { values: synthUsers(7, 'tiny') };
     const { rec } = await runWith(baseRoutes((req) => (req.path.startsWith('/rest/api/3/users?') ? { status: 200, json: shortPage } : null)));
     expect(rec.streams.jiraUsers.state).toBe('OK');
     expect(rec.status).toBe('COMPLETE');
   });
 
-  it('an EMPTY page after a bare full page still cannot prove continuation => honest PARTIAL', async () => {
+  it('HIGH-5c: an EMPTY page after a bare full page still cannot prove continuation => honest PARTIAL', async () => {
     // Without a position echo we cannot distinguish "end of set" from
     // "responder ignoring our probe"; the conservative verdict stands even
     // though this particular responder was well-behaved.
@@ -130,7 +130,7 @@ describe('HIGH 5 repair: unknown pagination continuation never presents as COMPL
     expect(rec.streams.jiraUsers.reason ?? '').toMatch(/unverifiable/);
   });
 
-  it('a position-echoing responder is probed to completion => everything acquired, COMPLETE', async () => {
+  it('HIGH-5d: a position-echoing responder is probed to completion => everything acquired, COMPLETE', async () => {
     // Honors offsets and echoes startAt, but never sets isLast/total: the
     // strict-but-fair path. Probe must walk 120 users across 3 pages and end
     // on the definitive empty page.

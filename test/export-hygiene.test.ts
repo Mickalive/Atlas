@@ -101,7 +101,7 @@ describe('SEC-L1 repair: spreadsheet-formula injection is neutralized in CSV', (
   });
 });
 
-describe('MEDIUM 6 repair: CSV/markdown/dashboard share ONE pool policy', () => {
+describe('M-INT-4 / MEDIUM 6 repair: CSV/markdown/dashboard share ONE pool policy', () => {
   it('CSV TOTALS rows equal report.totals even when a card is partially bounded', () => {
     // Card carries a sourced portion (14640c) but is partially bounded =>
     // per-row dollar cell shows QUOTE_REQUIRED while the pool keeps its

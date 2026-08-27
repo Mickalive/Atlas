@@ -84,7 +84,7 @@ describe('SEC-H2 repair: scan-state concurrency lease', () => {
     }
   });
 
-  it('an expired foreign lease is taken over so crashed invocations cannot wedge scans', async () => {
+  it('SEC-H2b: an expired foreign lease is taken over so crashed invocations cannot wedge scans', async () => {
     const storage = memoryStorage();
     const svc = makeService(storage);
     await svc.ensureScan();
@@ -100,7 +100,7 @@ describe('SEC-H2 repair: scan-state concurrency lease', () => {
     expect(rec.streams.jiraUsers.state).not.toBe('PENDING');
   });
 
-  it('terminal states release the lease for subsequent scans', async () => {
+  it('SEC-H2c: terminal states release the lease for subsequent scans', async () => {
     const storage = memoryStorage();
     const svc = makeService(storage);
     await svc.ensureScan();
@@ -113,7 +113,7 @@ describe('SEC-H2 repair: scan-state concurrency lease', () => {
     expect(final!.leaseOwnerToken).toBeNull();
   });
 
-  it('sequential chunks from the SAME service renew their own lease instead of self-blocking', async () => {
+  it('SEC-H2d: sequential chunks from the SAME service renew their own lease instead of self-blocking', async () => {
     const storage = memoryStorage();
     const svc = makeService(storage);
     await svc.ensureScan();

@@ -131,13 +131,16 @@ resolver.define('setRenewalDate', async ({ payload, context }: { payload: any; c
 
 resolver.define('setExceptions', async ({ payload, context }: { payload: any; context: ForgeInvocationContext }) => {
   const { service } = buildService(context);
-  const ids = Array.isArray(payload?.exceptionAccountIds)
+  const raw = Array.isArray(payload?.exceptionAccountIds)
     ? (payload.exceptionAccountIds as unknown[]).filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 128)
     : [];
+  // SEC-R7: Bound exception list to prevent storage bloat.
+  const MAX_EXCEPTIONS = 500;
+  const ids = raw.slice(0, MAX_EXCEPTIONS);
   const cfg = await service.getRenewalConfig();
   await service.setRenewalConfig({ ...cfg, exceptionAccountIds: [...new Set(ids)] });
-  logger.info('exceptions updated', { count: ids.length });
-  return { ok: true, count: ids.length };
+  logger.info('exceptions updated', { count: ids.length, truncated: raw.length > MAX_EXCEPTIONS });
+  return { ok: true, count: ids.length, truncated: raw.length > MAX_EXCEPTIONS };
 });
 
 resolver.define('buildExport', async ({ payload, context }: { payload: any; context: ForgeInvocationContext }) => {

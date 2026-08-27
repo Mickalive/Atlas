@@ -1,7 +1,7 @@
 {
-  "release_status": "BUILDING",
+  "release_status": "PARITY_READY_AWAITING_CREDENTIALS",
   "continue": true,
-  "reason": "The autonomous factory has been rebuilt from the foundation as one clean parallel DAG with the seven original specialist roles, independent red-team lanes, deterministic promotion gates, integrated five-minute OpenCode watchdog/retries, a final always-run heartbeat, and clean-slate execution hygiene. Before returning to a credential-only wait state, Atlas must complete one full audited convergence cycle under this rebuilt architecture and prove that no automatable product blocker remains.",
-  "next_focus": "Run the full parallel factory: refresh product/API/security architecture in parallel, build the real candidate, execute independent functional and security red teams in parallel, integrate their findings, pass all deterministic gates, and only then decide whether the remaining boundary is truly authenticated Forge/live evidence or additional product work.",
-  "updated_at": "2026-08-27T13:02:00Z"
+  "reason": "Release-integrator integration cycle completed. Both independent audits found zero BLOCKER and zero HIGH findings. Five material repairs applied (F-MED 2, SEC-R3, F-LOW 1, F-LOW 5, SEC-R7) with 16 new regression tests. All 143 tests pass, TypeScript compiles cleanly. Remaining UNKNOWNs are all authenticated-Forge/live-evidence boundary: real Forge registration/lint/deploy/install, live scope acceptance, KVS concurrency semantics, and branch protection certification. No product code changes remain automatable without credentials.",
+  "next_focus": "When Forge credentials and a target Jira site become available: register the app, persist the real ARI, run authenticated forge lint, deploy to development, install on the target site, and retire the remaining UNKNOWNs. Until then, the single factory should wake on schedule, make no Ox call, and exit cleanly.",
+  "updated_at": "2026-08-27T15:58:00Z"
 }
