@@ -2,108 +2,110 @@
 
 Status: HUMAN-OWNED, BINDING, STABLE.
 
-This file defines the product and the autonomous operating model. Agents may not rewrite, weaken or supersede it.
-
 ## Mission
 
-Build a real Atlassian Marketplace product whose first useful question is:
+Build a real Atlassian Marketplace product answering first:
 
 **What can I safely remove before my next Atlassian renewal, and how much money will that save me?**
 
-Atlas is an Atlassian Renewal FinOps / License Cost Optimizer. It is not generic user administration, Jira analytics, an AI assistant, consulting software, or broad SaaS-spend management. The principal UI metric is **ESTIMATED ANNUAL SAVINGS**.
+Atlas is an Atlassian Renewal FinOps / License Cost Optimizer. The principal UI metric is **ESTIMATED ANNUAL SAVINGS**.
 
 ## Product invariants
 
-- Risk classes are SAFE NOW, REVIEW, KEEP, UNKNOWN.
+- Risk classes: SAFE NOW / REVIEW / KEEP / UNKNOWN.
 - Missing evidence is UNKNOWN, never SAFE.
 - Inactivity is a signal, not proof.
 - False-positive removal recommendations are the worst failure.
 - Partial scans remain visibly partial.
 - Financial values expose assumptions and uncertainty.
-- Tier/band/minimum pricing is modeled as scenarios, never naïve seats × list price.
+- Tier/band/minimum pricing is scenario-based, not naive seats × list price.
 - Recommendations explain WHAT, WHY, MONEY, RISK and EVIDENCE.
-- V1 is Forge-first and read-only unless sourced API evidence proves that impossible.
+- V1 is Forge-first and read-only unless sourced API evidence proves otherwise.
 - Priority products: Jira, Confluence, JSM, JPD, but support is claimed only where current APIs make it defensible.
 - No external LLM/API dependency belongs in V1.
 - Least privilege, minimal storage, tenant isolation and no secrets in repo/logs are mandatory.
 
-## Architecture
+Production transport/context sits behind the Atlas-owned `AtlassianGateway`. Fixtures may replace transport only for deterministic tests; downstream normalization, evidence, risk, finance, recommendations and UI logic stay shared.
 
-Production transport/context sits behind the Atlas-owned `AtlassianGateway`. Fixtures may replace transport only for deterministic development and tests. There is no separate demo scanner or demo business logic: normalization, evidence, risk, finance, recommendations and UI models are shared downstream of acquisition.
+When an Atlassian/Forge platform fact matters, verify current official Atlassian documentation. Never invent endpoints, scopes, billing semantics, authentication behavior or Marketplace capabilities.
 
-When an Atlassian/Forge platform fact matters, verify current official Atlassian documentation rather than relying on memory. Never invent endpoints, scopes, Marketplace permissions, billing semantics or authentication behavior.
+## Seven original specialist roles — mandatory
 
-## Original seven-role team — preserved
+1. `market_product_architect` — narrow commercial V1, money-first UX, scope discipline.
+2. `api_architect` — sourced Atlassian/Forge feasibility, auth/scopes/pagination/gateway contract.
+3. `security_test_architect` — least privilege, false-positive/security/tenancy test contract.
+4. `implementation_builder` — actual Forge product implementation.
+5. `functional_redteam` — independent functional/financial adversarial audit; does not repair.
+6. `security_redteam` — independent security/Marketplace adversarial audit; does not repair.
+7. `release_integrator` — release director; consumes both audits, repairs findings, runs final gates, sets release truth.
 
-The original Atlas specialist roles are binding and must remain present:
+Do not collapse these responsibilities into one generic agent. Do not add agents merely to create activity.
 
-1. `market_product_architect` — freeze the narrowest commercially credible, money-first V1 and keep scope disciplined.
-2. `api_architect` — establish the sourced Atlassian/Forge feasibility boundary, scopes, auth, pagination and gateway contract.
-3. `security_test_architect` — define least-privilege rules, adversarial tests, tenant isolation and release blockers before implementation is trusted.
-4. `implementation_builder` — build the actual Forge V1 from the architecture outputs on the real working tree.
-5. `functional_redteam` — independently attack correctness and every claimed saving. It judges; it does not repair product code.
-6. `security_redteam` — independently attack security, Marketplace trust, tenancy, auth, storage, scopes and fixture/live separation. It judges; it does not repair product code.
-7. `release_integrator` — consume both independent audits, make the smallest material repairs, run release gates, update release truth and direct the next cycle.
+## Clean parallel-lane factory
 
-The roles are preserved; the old orchestration is not. There are no per-role branches, candidate branches, continuation branches, mounted lane handoffs, supervisor workflows or separate watchdog workflows.
+There is exactly one workflow: `.github/workflows/atlas-factory.yml`.
 
-## Single sequential factory
+When product work is required, it executes this DAG:
 
-There is exactly one GitHub Actions workflow: `.github/workflows/atlas-factory.yml`.
+```text
+market_product_architect ─┐
+api_architect ────────────┼─> implementation_builder ─┬─> functional_redteam ─┐
+security_test_architect ──┘                           └─> security_redteam ────┼─> release_integrator ─> deterministic gates ─> main
+                                                                                 ┘
+```
 
-When product work is required it runs, on one working tree, in this order:
+The three architecture lanes run in parallel. Their only persistent candidate outputs are canonical architecture-document patches passed as ephemeral GitHub artifacts inside the same run.
 
-`market_product_architect → api_architect → security_test_architect → implementation_builder → functional_redteam → security_redteam → release_integrator → deterministic gates → commit`
+The builder starts from the same `main`, applies all three architecture patches, builds the product, passes smoke tests, and emits one ephemeral candidate patch.
 
-Architect outputs are ordinary canonical repository documents, not branch handoffs. The builder reads those documents. Both red teams inspect the exact builder working tree and write only their audit reports. The release integrator is the only role allowed to repair audit findings after the independent judgments exist.
+Both red teams start independently from the exact same candidate patch and run in parallel. Their only durable outputs are fresh audit reports. They do not repair product code.
 
-Agent judgment is not the final authority. The same workflow must pass tests, backend/frontend typecheck, static/security/Marketplace gates, high/critical dependency audit, build and isolated Forge parity before autonomous product changes are committed.
+The release integrator starts from the exact candidate patch plus both fresh audits, repairs material findings, preserves the independent audit reports, runs the complete deterministic gate suite, and only then commits the integrated result to `main`.
 
-## One heartbeat, no supervisory stack
+No per-agent Git branches. No candidate branches. No continuation branches. No supervisor workflow. No separate watchdog workflow. No secondary CI workflow. `main` is the only persistent product truth.
 
-The single factory runs every five minutes and may also be started manually. It is serialized with one concurrency group and never cancels an active factory.
+## Resilience from the foundation
 
-The schedule itself is recovery. OpenCode/provider/network failures are retried inside the OpenCode wrapper. If an OpenCode call produces no output for five minutes, the wrapper terminates it and treats it as transient. If retries are exhausted or any run fails, the next scheduled factory starts again from the last committed good `main`.
+The single workflow is serialized by one concurrency group.
 
-No autonomous agent may create another workflow, recovery controller, factory branch, candidate branch or continuation branch.
+OpenCode installation and every OpenCode call have bounded transient retries. An OpenCode call that produces no output for five minutes is killed and classified as transient by the existing wrapper.
+
+If any lane, audit, gate or provider call still fails, the run is not promoted. A final heartbeat job executes with `always()`, waits five minutes and redispatches the same workflow if Atlas is unfinished and no replacement run already exists. The `*/5` GitHub schedule remains a backup heartbeat if the run itself dies before redispatch.
+
+This is the entire recovery model. Do not add a watcher for the watcher.
+
+## Execution cleanup
+
+The preflight job owns execution hygiene inside this same workflow. It may delete obsolete `factory/*` branches, disable historical workflow registrations, delete completed runs belonging to obsolete workflows, and keep only a small diagnostic tail of current Factory runs. Cleanup is housekeeping, not a controller and never decides product truth.
 
 ## Machine state
 
 `state/factory_direction.json` is the only machine direction file.
 
 Allowed states:
-- `BUILDING`
-- `PARITY_READY_AWAITING_CREDENTIALS`
-- `LIVE_DEV_VERIFIED`
-- `BLOCKED_HUMAN`
-- `MARKETPLACE_READY`
+- BUILDING
+- PARITY_READY_AWAITING_CREDENTIALS
+- LIVE_DEV_VERIFIED
+- BLOCKED_HUMAN
+- MARKETPLACE_READY
 
-`MARKETPLACE_READY` is the only final state and the only state allowed to set `continue=false`. Every other state keeps `continue=true` and an honest concrete next focus or blocker.
+`MARKETPLACE_READY` is the only final state and the only state allowed to set `continue=false`.
 
-Behavior:
-- `BUILDING` or `LIVE_DEV_VERIFIED`: run the complete seven-role sequence, deterministic gates, then commit only if green.
-- `PARITY_READY_AWAITING_CREDENTIALS`: if Forge credentials/site are absent, exit cleanly and check again five minutes later without wasting Ox calls; if present, run authenticated Forge registration/lint/deploy/install.
-- `BLOCKED_HUMAN`: never fabricate missing human evidence. Continue only work that is genuinely automatable; otherwise re-check on the heartbeat.
-- `MARKETPLACE_READY`: stop product work cleanly.
+- BUILDING / LIVE_DEV_VERIFIED → run the full parallel-lane factory.
+- PARITY_READY_AWAITING_CREDENTIALS → if credentials exist, run authenticated Forge register/lint/deploy/install; if absent, wait and re-check without wasting Ox.
+- BLOCKED_HUMAN → never fabricate human evidence; re-check while preserving all automatable work already completed.
+- MARKETPLACE_READY → stop.
 
-## Authenticated Forge gate
+## Deterministic authority
 
-When credentials are available, the same workflow owns Forge registration if the manifest still has the sentinel app id, persistence of the real app id, authenticated `forge lint`, development deploy and Jira installation. A successful deploy/install is not Marketplace readiness; it advances to `LIVE_DEV_VERIFIED`, after which the seven-role factory finishes real-environment verification and Marketplace/security/privacy packaging.
+Agent judgment is never sufficient for promotion. Final release gates must include tests, backend/frontend typecheck, static/security/Marketplace checks, high/critical dependency audit, build and isolated Forge parity. Any failure means no promotion.
 
-Live claims require live evidence. Fixture or parity results are never called live.
+Live claims additionally require authenticated Forge evidence. Fixture/parity evidence is never called live.
 
 ## Anti-usine-à-gaz
 
-Do not build broad SaaS FinOps, AWS/Azure, ERP, Slack/Gmail/ServiceNow, giant RBAC, mobile, Data Center, AI copilots, cross-company benchmarking or complex executive dashboards now.
+Keep the specialist reasoning and genuine parallelism. Delete orchestration machinery that does not directly build, audit, validate, clean or retry the product.
 
-For every product feature ask: **Does this directly increase the probability that an admin installs Atlas, sees credible savings, trusts the recommendation and pays?** If not, defer it.
+For every product feature ask: **Does this increase the probability an admin installs Atlas, sees credible savings, trusts the recommendation and pays?** If not, defer it.
 
-For every automation mechanism ask: **Is this necessary to build, independently audit, validate or retry the product?** If not, delete it.
-
-## Done
-
-Parity done = real Forge-shaped V1, production + fixture adapters behind the same gateway, tested risk/financial logic, money-first UI, no material known correctness/security blocker and strict deterministic parity green.
-
-Live done additionally requires authenticated Forge lint/deploy/install and real-environment checks of tenant context, pagination, permissions, KVS behavior and recommendation correctness.
-
-`MARKETPLACE_READY` additionally requires Marketplace/security/privacy packaging and required human attestations, no unresolved release blocker, and all deterministic gates green. Only then may continuation stop.
+For every automation mechanism ask: **Does this directly enable parallel specialist work, independent audit, deterministic validation, recovery or hygiene?** If not, delete it.
