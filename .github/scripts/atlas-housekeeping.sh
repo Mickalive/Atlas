@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-set -uo pipefail
+set -euo pipefail
 
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-KEEP_RUNS_PER_WORKFLOW="${ATLAS_KEEP_RUNS_PER_WORKFLOW:-8}"
-KEEP_FACTORY_BRANCH_SETS="${ATLAS_KEEP_FACTORY_BRANCH_SETS:-2}"
+CURRENT_SHA="${GITHUB_SHA:-}"
+KEEP_CI_RUNS="${ATLAS_KEEP_CI_RUNS:-5}"
+KEEP_FACTORY_RUNS_PER_SHA="${ATLAS_KEEP_FACTORY_RUNS_PER_SHA:-3}"
 
 ALLOWED_WORKFLOWS=(
-  ".github/workflows/atlas-factory.yml"
-  ".github/workflows/atlas-factory-supervisor.yml"
-  ".github/workflows/atlas-watchdog.yml"
-  ".github/workflows/atlas-main-ci.yml"
+  '.github/workflows/atlas-factory.yml'
+  '.github/workflows/atlas-main-ci.yml'
 )
 
 is_allowed_workflow() {
@@ -21,19 +20,17 @@ is_allowed_workflow() {
   return 1
 }
 
-warn() {
-  echo "::warning::$*"
-}
+warn() { echo "::warning::$*"; }
 
-echo "ATLAS_HOUSEKEEPING=START"
+echo 'ATLAS_HOUSEKEEPING=START'
 
-# Disable stale workflow registrations. Deleted workflow files can remain visible
-# in Actions history; they must never stay active beside the canonical four.
+# Deleted workflow files can remain registered in Actions. Disable every
+# historical controller except the two canonical workflows.
 while IFS=$'\t' read -r workflow_id workflow_path workflow_state; do
   [[ -n "${workflow_id:-}" ]] || continue
   if ! is_allowed_workflow "$workflow_path"; then
-    echo "ATLAS_HOUSEKEEPING=OBSOLETE_WORKFLOW id=$workflow_id path=$workflow_path state=$workflow_state"
-    if [[ "$workflow_state" == "active" ]]; then
+    echo "ATLAS_HOUSEKEEPING=DISABLE_OBSOLETE_WORKFLOW id=$workflow_id path=$workflow_path state=$workflow_state"
+    if [[ "$workflow_state" == 'active' ]]; then
       gh api --method PUT "repos/${REPO}/actions/workflows/${workflow_id}/disable" >/dev/null \
         || warn "Could not disable obsolete workflow $workflow_id ($workflow_path)"
     fi
@@ -42,81 +39,77 @@ done < <(gh api "repos/${REPO}/actions/workflows?per_page=100" --jq '.workflows[
 
 RUNS_JSON=$(gh api "repos/${REPO}/actions/runs?per_page=100" 2>/dev/null || echo '{"workflow_runs":[]}')
 
-# Delete completed runs belonging to obsolete workflow definitions.
+# Remove completed runs from deleted workflows.
 while read -r run_id; do
   [[ -n "$run_id" ]] || continue
   echo "ATLAS_HOUSEKEEPING=DELETE_OBSOLETE_RUN id=$run_id"
   gh api --method DELETE "repos/${REPO}/actions/runs/${run_id}" >/dev/null \
-    || warn "Could not delete obsolete workflow run $run_id"
+    || warn "Could not delete obsolete run $run_id"
 done < <(
-  jq -r --argjson allowed '[".github/workflows/atlas-factory.yml",".github/workflows/atlas-factory-supervisor.yml",".github/workflows/atlas-watchdog.yml",".github/workflows/atlas-main-ci.yml"]' '
+  jq -r --argjson allowed '[".github/workflows/atlas-factory.yml",".github/workflows/atlas-main-ci.yml"]' '
     .workflow_runs[]?
     | select(.status == "completed")
     | select(.path as $p | ($allowed | index($p) | not))
     | .id
-  ' <<<"$RUNS_JSON" 2>/dev/null || true
+  ' <<<"$RUNS_JSON"
 )
 
-# Keep only a short diagnostic tail for each canonical workflow. Historical
-# commits and release docs remain the durable record; old Actions executions do
-# not participate in control decisions and should not accumulate indefinitely.
-for workflow_path in "${ALLOWED_WORKFLOWS[@]}"; do
+# Old multi-lane factory executions share the same workflow path. Once the new
+# factory is running on a new SHA, runs from older definitions are obsolete.
+if [[ -n "$CURRENT_SHA" ]]; then
   while read -r run_id; do
     [[ -n "$run_id" ]] || continue
-    echo "ATLAS_HOUSEKEEPING=PRUNE_CANONICAL_RUN id=$run_id path=$workflow_path"
+    echo "ATLAS_HOUSEKEEPING=DELETE_OLD_FACTORY_DEFINITION_RUN id=$run_id"
     gh api --method DELETE "repos/${REPO}/actions/runs/${run_id}" >/dev/null \
-      || warn "Could not prune canonical workflow run $run_id"
+      || warn "Could not delete old factory run $run_id"
   done < <(
-    jq -r --arg path "$workflow_path" --argjson keep "$KEEP_RUNS_PER_WORKFLOW" '
-      [.workflow_runs[]? | select(.path == $path and .status == "completed")]
-      | sort_by(.created_at) | reverse
-      | .[$keep:][]?.id
-    ' <<<"$RUNS_JSON" 2>/dev/null || true
+    jq -r --arg sha "$CURRENT_SHA" '
+      .workflow_runs[]?
+      | select(.path == ".github/workflows/atlas-factory.yml" and .status == "completed" and .head_sha != $sha)
+      | .id
+    ' <<<"$RUNS_JSON"
   )
-done
+fi
 
-# Preserve every active factory run plus the newest completed factory runs so a
-# very recent failed snapshot remains inspectable/salvageable. All older
-# numeric factory branches are disposable execution scratch. factory/continuation
-# is intentionally non-numeric and therefore never selected for deletion.
-declare -A PROTECTED_FACTORY_IDS=()
+# Keep only a tiny diagnostic tail for factory runs from the current definition.
 while read -r run_id; do
-  [[ -n "$run_id" ]] && PROTECTED_FACTORY_IDS["$run_id"]=1
+  [[ -n "$run_id" ]] || continue
+  echo "ATLAS_HOUSEKEEPING=PRUNE_FACTORY_RUN id=$run_id"
+  gh api --method DELETE "repos/${REPO}/actions/runs/${run_id}" >/dev/null \
+    || warn "Could not prune factory run $run_id"
 done < <(
-  jq -r '
-    .workflow_runs[]?
-    | select(.path == ".github/workflows/atlas-factory.yml" and .status != "completed")
-    | .id
-  ' <<<"$RUNS_JSON" 2>/dev/null || true
-)
-while read -r run_id; do
-  [[ -n "$run_id" ]] && PROTECTED_FACTORY_IDS["$run_id"]=1
-done < <(
-  jq -r --argjson keep "$KEEP_FACTORY_BRANCH_SETS" '
+  jq -r --arg sha "$CURRENT_SHA" --argjson keep "$KEEP_FACTORY_RUNS_PER_SHA" '
     [.workflow_runs[]?
-      | select(.path == ".github/workflows/atlas-factory.yml" and .status == "completed")]
+      | select(.path == ".github/workflows/atlas-factory.yml" and .status == "completed" and (.head_sha == $sha or $sha == ""))]
     | sort_by(.created_at) | reverse
-    | .[:$keep][]?.id
-  ' <<<"$RUNS_JSON" 2>/dev/null || true
+    | .[$keep:][]?.id
+  ' <<<"$RUNS_JSON"
 )
 
+# CI history is useful, but only a short tail is needed.
+while read -r run_id; do
+  [[ -n "$run_id" ]] || continue
+  echo "ATLAS_HOUSEKEEPING=PRUNE_CI_RUN id=$run_id"
+  gh api --method DELETE "repos/${REPO}/actions/runs/${run_id}" >/dev/null \
+    || warn "Could not prune CI run $run_id"
+done < <(
+  jq -r --argjson keep "$KEEP_CI_RUNS" '
+    [.workflow_runs[]?
+      | select(.path == ".github/workflows/atlas-main-ci.yml" and .status == "completed")]
+    | sort_by(.created_at) | reverse
+    | .[$keep:][]?.id
+  ' <<<"$RUNS_JSON"
+)
+
+# The simplified factory never uses execution branches. Delete every historical
+# factory/* branch, including continuation/candidate/lane branches.
 while read -r branch; do
   [[ -n "$branch" ]] || continue
-  if [[ "$branch" =~ ^factory/([0-9]+)/ ]]; then
-    run_id="${BASH_REMATCH[1]}"
-    if [[ -n "${PROTECTED_FACTORY_IDS[$run_id]:-}" ]]; then
-      echo "ATLAS_HOUSEKEEPING=PRESERVE_RECENT_FACTORY_BRANCH branch=$branch"
-      continue
-    fi
-    echo "ATLAS_HOUSEKEEPING=DELETE_FACTORY_BRANCH branch=$branch"
+  if [[ "$branch" == factory/* || "$branch" == 'cleanup-scratch' ]]; then
+    echo "ATLAS_HOUSEKEEPING=DELETE_OBSOLETE_BRANCH branch=$branch"
     gh api --method DELETE "repos/${REPO}/git/refs/heads/${branch}" >/dev/null \
-      || warn "Could not delete stale factory branch $branch"
-  elif [[ "$branch" == "cleanup-scratch" ]]; then
-    echo "ATLAS_HOUSEKEEPING=DELETE_SCRATCH_BRANCH branch=$branch"
-    gh api --method DELETE "repos/${REPO}/git/refs/heads/${branch}" >/dev/null \
-      || warn "Could not delete cleanup scratch branch"
+      || warn "Could not delete obsolete branch $branch"
   fi
 done < <(gh api --paginate "repos/${REPO}/branches?per_page=100" --jq '.[].name' 2>/dev/null || true)
 
-echo "ATLAS_HOUSEKEEPING=DONE"
-exit 0
+echo 'ATLAS_HOUSEKEEPING=DONE'
