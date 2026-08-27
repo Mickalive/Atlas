@@ -68,7 +68,7 @@ The red teams remain genuinely independent: they write fresh audit reports and d
 
 Only three technical helpers remain: resilient OpenCode installation, one OpenCode-call retry/inactivity wrapper, and the Forge parity script. The five-minute schedule itself is the recovery heartbeat.
 
-The new single-workflow topology must not be called runtime-verified until a run using the rebuilt YAML is actually observed. Its repository structure and agent registry are currently consistent: one workflow and seven exact canonical agent definitions/cards.
+The rebuilt workflow is runtime-verified by GitHub Actions run `33071898278` at commit `736ce1685b2e7836eeb238dfdb611d662f9d0d96`: it parsed and executed successfully, read `PARITY_READY_AWAITING_CREDENTIALS`, detected that live Forge credentials were absent, executed the credential-recheck path, and correctly skipped every Ox/product/live step. A scheduled invocation of this new YAML has not yet been observed; the `*/5` schedule is configured, while GitHub scheduled Actions may start with delay.
 
 ## State behavior
 
