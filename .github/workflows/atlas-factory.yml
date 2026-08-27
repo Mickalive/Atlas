@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  actions: write
 
 concurrency:
   group: atlas-product-factory
@@ -18,10 +17,11 @@ env:
   ATLAS_NODE_VERSION: '24'
 
 jobs:
-  advance:
-    name: ADVANCE ATLAS
+  factory:
+    name: BUILD AUDIT INTEGRATE ATLAS
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
+
     steps:
       - uses: actions/checkout@v6
         with:
@@ -32,92 +32,126 @@ jobs:
           node-version: ${{ env.ATLAS_NODE_VERSION }}
           cache: npm
 
-      - name: Validate simple control plane
-        run: bash .github/scripts/control-plane-check.sh
-
-      - name: Remove obsolete Atlas automation history
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/atlas-housekeeping.sh
-
-      - name: Detect live Forge credentials without exposing them to builders
-        id: credentials
+      - name: Read release state and credentials
+        id: mode
         shell: bash
         env:
           FORGE_EMAIL: ${{ secrets.FORGE_EMAIL }}
           FORGE_API_TOKEN: ${{ secrets.FORGE_API_TOKEN }}
           ATLASSIAN_SITE: ${{ secrets.ATLASSIAN_SITE }}
-          FORGE_DEVELOPER_SPACE_ID: ${{ secrets.FORGE_DEVELOPER_SPACE_ID }}
         run: |
           set -euo pipefail
-          forge_ready=false
-          register_ready=false
-          if [[ -n "$FORGE_EMAIL" && -n "$FORGE_API_TOKEN" && -n "$ATLASSIAN_SITE" ]]; then
-            forge_ready=true
-          fi
-          if [[ "$forge_ready" == true && -n "$FORGE_DEVELOPER_SPACE_ID" ]]; then
-            register_ready=true
-          fi
-          echo "forge_ready=$forge_ready" >> "$GITHUB_OUTPUT"
-          echo "register_ready=$register_ready" >> "$GITHUB_OUTPUT"
-
-      - name: Decide the only next mode
-        id: mode
-        shell: bash
-        env:
-          FORGE_READY: ${{ steps.credentials.outputs.forge_ready }}
-        run: |
-          set -euo pipefail
-          status=$(jq -r '.release_status' state/factory_direction.json)
-          next_focus=$(jq -r '.next_focus // empty' state/factory_direction.json)
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-
+          status=$(jq -r '.release_status // empty' state/factory_direction.json)
           case "$status" in
-            MARKETPLACE_READY)
-              mode=stop
-              ;;
+            MARKETPLACE_READY) mode=stop ;;
             PARITY_READY_AWAITING_CREDENTIALS)
-              if [[ "$FORGE_READY" == true ]]; then mode=live; else mode=wait; fi
+              if [[ -n "$FORGE_EMAIL" && -n "$FORGE_API_TOKEN" && -n "$ATLASSIAN_SITE" ]]; then mode=live; else mode=wait; fi
               ;;
-            BUILDING|LIVE_DEV_VERIFIED|BLOCKED_HUMAN)
-              mode=build
-              ;;
-            *)
-              echo "::error::Unknown Atlas release_status: $status"
-              exit 64
-              ;;
+            BUILDING|LIVE_DEV_VERIFIED) mode=build ;;
+            BLOCKED_HUMAN) mode=human ;;
+            *) echo "::error::Invalid release_status: $status"; exit 64 ;;
           esac
-
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          echo "ATLAS_MODE=$mode status=$status next_focus=$next_focus"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "ATLAS_MODE=$mode status=$status"
 
-      - name: Stop cleanly when Marketplace-ready
+      - name: Stop when Marketplace-ready
         if: steps.mode.outputs.mode == 'stop'
-        run: echo 'ATLAS_FACTORY=STOP_MARKETPLACE_READY'
+        run: echo 'ATLAS_FACTORY=MARKETPLACE_READY'
 
-      - name: Wait cleanly for live credentials
+      - name: Recheck credentials on next heartbeat
         if: steps.mode.outputs.mode == 'wait'
-        run: echo 'ATLAS_FACTORY=WAITING_FORGE_CREDENTIALS_NO_OX_CALL'
+        run: echo 'ATLAS_FACTORY=WAITING_FORGE_CREDENTIALS'
 
-      - name: Install OpenCode only when product work exists
+      - name: Recheck human blocker on next heartbeat
+        if: steps.mode.outputs.mode == 'human'
+        run: echo 'ATLAS_FACTORY=BLOCKED_HUMAN_RECHECK_NEXT_HEARTBEAT'
+
+      - name: Install OpenCode
         if: steps.mode.outputs.mode == 'build'
         run: bash .github/scripts/install-opencode-with-retry.sh
 
-      - name: Advance the product in one bounded autonomous pass
+      - name: Install product dependencies for agent tests
+        if: steps.mode.outputs.mode == 'build'
+        run: npm ci
+
+      - name: Market and product architecture
+        if: steps.mode.outputs.mode == 'build'
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent market_product_architect \
+            "Work only as the canonical market_product_architect. Read the master prompt, product contract, your card, current product/release state and docs/PRODUCT_V1.md. Inspect the existing Atlas product rather than redesigning it. Update the canonical product/V1 document only where a concrete release or market reality requires it. Preserve the money-first wedge and narrow V1. Do not implement product code or automation."
+
+      - name: Atlassian and Forge API architecture
+        if: steps.mode.outputs.mode == 'build'
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent api_architect \
+            "Work only as the canonical api_architect. Read the master prompt, product contract, your card, current product/release state and API feasibility docs. Verify current official Atlassian/Forge documentation whenever a platform fact matters. Update the canonical feasibility/gateway contract only when evidence requires it. Do not implement product code or automation and do not invent unsupported access."
+
+      - name: Security and test architecture
+        if: steps.mode.outputs.mode == 'build'
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent security_test_architect \
+            "Work only as the canonical security_test_architect. Read the master prompt, product contract, your card, current implementation, release state and security/test plan. Update executable security, false-positive, tenancy, permission and fixture/live test requirements where needed. Do not implement product code or automation."
+
+      - name: Build the actual product
+        if: steps.mode.outputs.mode == 'build'
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent implementation_builder \
+            "Work only as the canonical implementation_builder. Read the master prompt, product contract, all three canonical architect documents, current release status and state. Implement the concrete next_focus or highest-value remaining release blocker in the real Atlas product. Preserve the existing product invariants and narrow read-only Forge V1. Add or repair regression tests for material behavior. Do not create workflows, agents, branches or handoff layers. Do not stop at analysis."
+
+      - name: Reset audit reports for this exact builder tree
+        if: steps.mode.outputs.mode == 'build'
+        run: |
+          mkdir -p audit
+          rm -f audit/FUNCTIONAL.md audit/SECURITY.md
+
+      - name: Independent functional and financial red team
+        if: steps.mode.outputs.mode == 'build'
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent functional_redteam \
+            "Audit the exact current builder working tree independently. Try to falsify every SAFE NOW classification and every savings claim; attack missing/partial evidence, pagination, retries, pricing/tier/band math, rounding, identities, fixture/live parity and misleading UX. Do not repair product code. Your only durable write is audit/FUNCTIONAL.md with severity and reproduction evidence."
+          test -s audit/FUNCTIONAL.md
+
+      - name: Independent security and Marketplace red team
+        if: steps.mode.outputs.mode == 'build'
+        shell: bash
+        run: |
+          .github/scripts/run-opencode-with-retry.sh run \
+            --model "$ATLAS_MODEL" \
+            --agent security_redteam \
+            "Audit the exact current builder working tree independently. Attack scopes, tenancy, auth, storage, secrets, egress, fixture/live separation, concurrency/state safety and Marketplace trust assumptions. Do not repair product code. Your only durable write is audit/SECURITY.md with severity and reproduction evidence."
+          test -s audit/SECURITY.md
+
+      - name: Integrate audit findings and direct release
         if: steps.mode.outputs.mode == 'build'
         shell: bash
         run: |
           .github/scripts/run-opencode-with-retry.sh run \
             --model "$ATLAS_MODEL" \
             --agent release_integrator \
-            "Advance the existing Atlas product, not the automation. Read ATLAS_MASTER_PROMPT.md, PRODUCT_CONTRACT.md, AGENTS.md, your canonical card, docs/RELEASE_STATUS.md and state/factory_direction.json. Implement the concrete next_focus or the highest-value remaining release blocker. Preserve the current product, its read-only V1 scope, its evidence/risk semantics and all existing tests. Verify current official Atlassian/Forge documentation when a platform fact matters. Do not create new agents, workflows, branches, handoff layers or speculative features. Do not stop at analysis: edit the product, add or repair tests where needed, run the real gates, update docs/RELEASE_STATUS.md and state/factory_direction.json honestly."
+            "Work only as the canonical release_integrator. Read both fresh audit/FUNCTIONAL.md and audit/SECURITY.md plus the master prompt, product contract, release docs and state. Repair BLOCKER/HIGH and other material correctness/security findings with the smallest scoped changes; add regression coverage for material fixes; preserve both audit reports; do not widen V1 or redesign automation. Run relevant gates yourself, then update docs/RELEASE_STATUS.md and state/factory_direction.json honestly. MARKETPLACE_READY is the only final stop state."
 
-      - name: Install product dependencies for hard gates
-        if: steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'live'
+      - name: Reinstall exact dependencies after integration
+        if: steps.mode.outputs.mode == 'build'
         run: npm ci
 
-      - name: Hard deterministic product gates
-        if: steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'live'
+      - name: Deterministic release gates
+        if: steps.mode.outputs.mode == 'build'
         shell: bash
         run: |
           set -euo pipefail
@@ -128,7 +162,7 @@ jobs:
           npm run build
           bash .github/scripts/forge-parity-check.sh
 
-      - name: Commit only gate-clean autonomous product changes
+      - name: Commit only the fully audited gate-clean cycle
         if: steps.mode.outputs.mode == 'build'
         shell: bash
         run: |
@@ -140,12 +174,25 @@ jobs:
             echo 'ATLAS_PRODUCT_COMMIT=NO_CHANGES'
             exit 0
           fi
-          git commit -m "Advance Atlas product ${GITHUB_RUN_ID}"
+          git commit -m "Advance audited Atlas product ${GITHUB_RUN_ID}"
           git pull --rebase origin main
           git push origin HEAD:main
           echo 'ATLAS_PRODUCT_COMMIT=PASS'
 
-      - name: Authenticated Forge register, lint, deploy and install
+      - name: Pre-live deterministic gates
+        if: steps.mode.outputs.mode == 'live'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm test
+          npm run typecheck
+          npm run lint
+          npm run audit:high
+          npm run build
+          bash .github/scripts/forge-parity-check.sh
+
+      - name: Authenticated Forge register lint deploy install
         if: steps.mode.outputs.mode == 'live'
         shell: bash
         env:
@@ -159,20 +206,12 @@ jobs:
           forge settings set usage-analytics false || true
           forge whoami
 
-          if ! grep -Eq '^[[:space:]]+id:[[:space:]]*ari:cloud:ecosystem::app/' manifest.yml || grep -Eq 'ari:cloud:ecosystem::app/0{8}-0{4}-0{4}-0{4}-0{12}|ATLAS_PLACEHOLDER' manifest.yml; then
+          if grep -Eq 'ari:cloud:ecosystem::app/0{8}-0{4}-0{4}-0{4}-0{12}' manifest.yml; then
             if [[ -z "$FORGE_DEVELOPER_SPACE_ID" ]]; then
-              echo '::error::FORGE_DEVELOPER_SPACE_ID is required to register the unregistered app.'
+              echo '::error::FORGE_DEVELOPER_SPACE_ID is required to register Atlas.'
               exit 65
             fi
             forge register --developer-space-id "$FORGE_DEVELOPER_SPACE_ID" --accept-terms 'Cut My Atlassian Bill'
-
-            git config user.name atlas-forge-release
-            git config user.email atlas-forge-release@autonomous.local
-            git add manifest.yml
-            git commit -m "Register Atlas Forge app"
-            git pull --rebase origin main
-            git push origin HEAD:main
-            echo 'ATLAS_FORGE_REGISTRATION=PERSISTED'
           fi
 
           forge lint
@@ -184,16 +223,18 @@ jobs:
           jq --arg now "$now" '
             .release_status="LIVE_DEV_VERIFIED"
             | .continue=true
-            | .reason="Authenticated Forge lint, development deploy and Jira install completed successfully. Real-environment verification and Marketplace packaging remain."
-            | .next_focus="Complete the real-environment verification checklist and Marketplace/security/privacy packaging without widening V1 scope."
+            | .reason="Authenticated Forge lint, development deploy and Jira install completed. Real-environment verification and Marketplace packaging remain."
+            | .next_focus="Run the complete seven-role cycle against the live-verified release boundary; finish real-environment checks and Marketplace/security/privacy packaging without widening V1 scope."
             | .updated_at=$now
           ' state/factory_direction.json > "$tmp"
           mv "$tmp" state/factory_direction.json
 
           git config user.name atlas-forge-release
           git config user.email atlas-forge-release@autonomous.local
-          git add state/factory_direction.json
-          git commit -m "Record Atlas live Forge verification"
-          git pull --rebase origin main
-          git push origin HEAD:main
+          git add manifest.yml state/factory_direction.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Record Atlas authenticated Forge verification"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
           echo 'ATLAS_FORGE_LIVE_GATE=PASS'
