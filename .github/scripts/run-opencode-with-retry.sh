@@ -106,14 +106,29 @@ round_delay() {
 
 args_with_model() {
   local model="$1"; shift
-  local out=() skip_next=0 arg
+  local out=() skip_next=0 found=0 arg
   for arg in "$@"; do
     if (( skip_next )); then skip_next=0; continue; fi
-    if [[ "$arg" == '--model' ]]; then skip_next=1; continue; fi
-    case "$arg" in --model=*) continue;; esac
+    if [[ "$arg" == '--model' ]]; then
+      out+=("--model" "$model")
+      skip_next=1
+      found=1
+      continue
+    fi
+    case "$arg" in
+      --model=*) out+=("--model=$model"); found=1; continue;;
+    esac
     out+=("$arg")
   done
-  printf '%s\0' "${out[@]}" '--model' "$model"
+  if (( ! found )); then
+    # No caller-supplied model: place it immediately after the subcommand when possible.
+    if [[ "${#out[@]}" -gt 0 && "${out[0]}" == 'run' ]]; then
+      out=("${out[0]}" '--model' "$model" "${out[@]:1}")
+    else
+      out+=("--model" "$model")
+    fi
+  fi
+  printf '%s\0' "${out[@]}"
 }
 
 model_chain_for_agent() {
