@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: atlas-product-factory
@@ -210,3 +211,21 @@ jobs:
             git push origin HEAD:main
           fi
           echo 'ATLAS_FORGE_LIVE_GATE=PASS'
+
+      - name: Relaunch the same factory after five minutes while unfinished
+        if: always() && steps.mode.outputs.mode != 'stop'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo 'ATLAS_NEXT_HEARTBEAT_WAIT_SECONDS=300'
+          sleep 300
+          runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/atlas-factory.yml/runs?per_page=20")
+          active=$(jq --argjson self "$GITHUB_RUN_ID" '[.workflow_runs[] | select((.status == "queued" or .status == "in_progress") and .id != $self)] | length' <<< "$runs")
+          if [[ "$active" -gt 0 ]]; then
+            echo "ATLAS_NEXT_HEARTBEAT=ALREADY_PRESENT count=$active"
+            exit 0
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/atlas-factory.yml/dispatches" -f ref=main
+          echo 'ATLAS_NEXT_HEARTBEAT=DISPATCHED'
