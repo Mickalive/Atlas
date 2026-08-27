@@ -68,6 +68,15 @@ jobs:
             done < <(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?per_page=100" --jq '.workflow_runs[] | select(.status == "completed") | .id' 2>/dev/null || true)
           done < <(jq -r '.workflows[] | select(.path != ".github/workflows/atlas-factory.yml") | .id' <<< "$workflows")
 
+          # Some deleted workflow registrations leave orphaned historical runs behind.
+          # Purge them directly from the repository run list so old topology cannot pollute Actions.
+          repo_runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100")
+          while read -r old_run; do
+            [[ -z "${old_run:-}" ]] && continue
+            echo "Deleting orphaned obsolete run id=$old_run"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/runs/${old_run}" >/dev/null 2>&1 || true
+          done < <(jq -r '.workflow_runs[] | select(.status == "completed" and .path != ".github/workflows/atlas-factory.yml") | .id' <<< "$repo_runs")
+
           # Keep only a short diagnostic tail of completed runs for the current factory.
           current_runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/atlas-factory.yml/runs?per_page=100")
           while read -r old_run; do
