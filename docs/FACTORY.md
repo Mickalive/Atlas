@@ -1,78 +1,86 @@
 # Atlas Product Factory
 
-Atlas now uses two workflows only:
+Atlas has one autonomous workflow:
 
-1. `.github/workflows/atlas-factory.yml` — autonomous product advancement and live Forge gate.
-2. `.github/workflows/atlas-main-ci.yml` — deterministic read-only CI.
+`.github/workflows/atlas-factory.yml`
 
-There is no Supervisor, separate Watchdog, architecture lane graph, candidate branch, continuation branch or kickoff trigger.
+There is no Supervisor, separate Watchdog workflow, deterministic-CI workflow, architecture branch graph, candidate branch, continuation branch, kickoff workflow or housekeeping controller.
 
-## One five-minute control loop
+## One five-minute heartbeat
 
-`Atlas Product Factory` is scheduled every five minutes and can also be started manually. It is serialized by one concurrency group with `cancel-in-progress: false`, so only one product cycle can run at a time.
+`Atlas Product Factory` runs every five minutes and may also be started manually. One concurrency group serializes the factory with `cancel-in-progress: false`.
 
-The schedule itself is the recovery heartbeat. OpenCode/provider/network failures get bounded retries inside the run. If those retries still fail, the next scheduled factory cycle is the retry. There is no second controller racing the first one.
+The schedule itself is recovery. OpenCode installation and calls have bounded internal retries. An OpenCode call with no output for five minutes is terminated as transient. If a run still fails, the next five-minute scheduled run starts again from the last committed good `main`.
 
-## State-driven behavior
+## Seven original specialist roles, one working tree
 
-The factory reads `state/factory_direction.json` and chooses exactly one mode:
+The original Atlas roles are preserved:
+
+1. `market_product_architect`
+2. `api_architect`
+3. `security_test_architect`
+4. `implementation_builder`
+5. `functional_redteam`
+6. `security_redteam`
+7. `release_integrator`
+
+When product work is required they execute sequentially on the same working tree:
+
+`market_product_architect → api_architect → security_test_architect → implementation_builder → functional_redteam → security_redteam → release_integrator → deterministic gates → commit`
+
+The three architects maintain their canonical product/API/security documents. The builder implements against those documents. The two red teams independently inspect the exact builder tree and write only `audit/FUNCTIONAL.md` and `audit/SECURITY.md`; they do not repair what they judge. The release integrator consumes both fresh reports and is the only role that repairs audit findings before final gates.
+
+There are no role-specific branches or handoff branches. Architect documents and audit reports live on the current working tree.
+
+## State behavior
+
+The factory reads `state/factory_direction.json`:
 
 - `MARKETPLACE_READY` → stop cleanly.
-- `PARITY_READY_AWAITING_CREDENTIALS` without Forge credentials/site → wait cleanly and make **no Ox call**.
-- `PARITY_READY_AWAITING_CREDENTIALS` with credentials/site → run the authenticated Forge live gate.
-- `BUILDING`, `LIVE_DEV_VERIFIED` or `BLOCKED_HUMAN` → run the sole autonomous product worker against the concrete `next_focus`.
+- `PARITY_READY_AWAITING_CREDENTIALS` without Forge credentials/site → wait cleanly, make no Ox call, and re-check on the next heartbeat.
+- `PARITY_READY_AWAITING_CREDENTIALS` with credentials/site → run the authenticated Forge gate.
+- `BUILDING` or `LIVE_DEV_VERIFIED` → run the complete seven-role product cycle.
+- `BLOCKED_HUMAN` → do not invent the missing human evidence; re-check on the next heartbeat.
 
-`MARKETPLACE_READY` is the only state with `continue=false`. Every unfinished state keeps a concrete `next_focus`.
+`MARKETPLACE_READY` is the only final stop state.
 
-## One product worker
+## Deterministic quality gates
 
-The only OpenCode role is `release_integrator`. It edits the existing product directly, self-audits against the deterministic regression suite, verifies current Atlassian/Forge facts when necessary, runs the gates and updates release truth.
-
-The old API architect, product architect, security architect, implementation builder and independent red-team lanes have been removed. Their useful product constraints remain encoded in the product constitution, product contract, tests and release evidence.
-
-The wrapper protects the human-owned control plane from agent edits.
-
-## Product gates
-
-Gate-clean autonomous changes are committed directly to `main`; failed changes are not promoted.
-
-Required gates are:
+After release integration, autonomous product changes must pass:
 
 - `npm test`;
-- backend + UI Kit typecheck;
+- backend + UI Kit frontend typecheck;
 - static product/security/Marketplace gates;
 - high/critical dependency advisory gate;
 - build gate;
 - isolated Forge parity gate.
 
-The independent deterministic CI runs the same product truth checks on relevant pushes to `main` and optionally runs authenticated `forge lint` when a registered app and Forge credentials exist.
+Only the fully audited, gate-clean cycle is committed to `main`.
 
 ## Forge live gate
 
-When Forge credentials and a target Atlassian site exist, the same factory owns:
+When Forge credentials and a target Atlassian site exist, the same workflow owns:
 
-1. Forge CLI authentication;
-2. app registration when the manifest still contains the placeholder app id;
-3. immediate persistence of the registered app id before any deploy attempt;
+1. deterministic pre-live gates;
+2. Forge CLI authentication;
+3. app registration when the manifest still contains the sentinel app id;
 4. authenticated `forge lint`;
 5. development deploy;
 6. Jira development installation;
 7. transition to `LIVE_DEV_VERIFIED`.
 
-The next product cycle then works on the real-environment verification checklist and Marketplace/security/privacy packaging. No fixture result is called live.
+A development install is not Marketplace readiness. The next seven-role cycle finishes real-environment verification and Marketplace/security/privacy packaging. Fixture/parity evidence is never described as live evidence.
 
-## Housekeeping
+## Minimal technical helpers
 
-At the start of each factory run, `.github/scripts/atlas-housekeeping.sh`:
+Only three GitHub helper scripts remain:
 
-- disables historical workflow registrations other than the two canonical workflows;
-- deletes completed runs from obsolete workflows;
-- deletes completed factory runs from older control-plane definitions and keeps only a tiny current diagnostic tail;
-- keeps only a short CI history;
-- deletes every historical `factory/*` execution branch.
+- `install-opencode-with-retry.sh` — install OpenCode with bounded transient retries;
+- `run-opencode-with-retry.sh` — run one named agent with provider/network retries and the five-minute inactivity watchdog;
+- `forge-parity-check.sh` — deterministic Forge-shaped parity validation.
 
-Historical release findings remain in git and release documentation; Actions/branch execution debris is not part of product state.
+They are helpers, not controllers. No helper schedules or dispatches another workflow.
 
 ## Anti-usine-à-gaz rule
 
-Automation must stay simpler than the product it is trying to finish. If continuity needs a supervisor for a watchdog for a supervisor, the design is wrong. The five-minute factory heartbeat, bounded retry wrapper, deterministic CI and machine state are the complete control plane.
+Keep the specialist reasoning; delete orchestration machinery. If reliable product completion can be expressed as one sequential factory, do not add a supervisor to watch a watchdog to restart a supervisor.
