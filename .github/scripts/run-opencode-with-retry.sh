@@ -12,9 +12,8 @@ LOG="$(mktemp)"
 START_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
 trap 'rm -f "$LOG"' EXIT
 
-# Current OpenCode Zen free-model routes, verified against current OpenCode docs.
-CODING_MODEL_CHAIN_DEFAULT='opencode/deepseek-v4-flash-free opencode/north-mini-code-free opencode/laguna-s-2.1-free'
-REASONING_MODEL_CHAIN_DEFAULT='opencode/laguna-s-2.1-free opencode/deepseek-v4-flash-free opencode/mimo-v2.5-free'
+# One global ordered free-model chain for every Atlas role.
+MODEL_CHAIN_DEFAULT='opencode/deepseek-v4-flash-free opencode/north-mini-code-free opencode/laguna-s-2.1-free opencode/mimo-v2.5-free'
 
 TRANSIENT_RE='(network_error|NetworkError|network error|fetch failed|APIConnectionError|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ENOTFOUND|ETIMEDOUT|timed out|socket hang up|HTTP[^0-9]*(429|500|502|503|504)|rate.?limit|free.?usage.?limit|service unavailable|bad gateway|gateway timeout|temporar(y|ily) unavailable|upstream request failed|endpoint is unavailable|unexpected server error|internal server error|provider[^\n]*(unavailable|overloaded|capacity)|server[^\n]*overloaded|try again later|UnknownError|Forbidden[^\n]*model|model[^\n]*(unavailable|not available|disabled)|err_[A-Za-z0-9]+|runner has received a shutdown signal|runner service is stopped|lost communication with the runner)'
 
@@ -121,7 +120,6 @@ args_with_model() {
     out+=("$arg")
   done
   if (( ! found )); then
-    # No caller-supplied model: place it immediately after the subcommand when possible.
     if [[ "${#out[@]}" -gt 0 && "${out[0]}" == 'run' ]]; then
       out=("${out[0]}" '--model' "$model" "${out[@]:1}")
     else
@@ -131,24 +129,9 @@ args_with_model() {
   printf '%s\0' "${out[@]}"
 }
 
-model_chain_for_agent() {
-  local agent="$1"
-  case "$agent" in
-    implementation_builder|release_integrator)
-      printf '%s\n' "${ATLAS_CODING_MODEL_CHAIN:-$CODING_MODEL_CHAIN_DEFAULT}"
-      ;;
-    market_product_architect|api_architect|security_test_architect|functional_redteam|security_redteam)
-      printf '%s\n' "${ATLAS_REASONING_MODEL_CHAIN:-$REASONING_MODEL_CHAIN_DEFAULT}"
-      ;;
-    *)
-      printf '%s\n' "${ATLAS_REASONING_MODEL_CHAIN:-$REASONING_MODEL_CHAIN_DEFAULT}"
-      ;;
-  esac
-}
-
 validate_agent_registry "$@" || exit $?
 agent=$(requested_agent_from_args "$@")
-chain=$(model_chain_for_agent "$agent")
+chain="${ATLAS_MODEL_CHAIN:-$MODEL_CHAIN_DEFAULT}"
 read -r -a models <<< "$chain"
 [[ "${#models[@]}" -gt 0 ]] || { echo '::error::Atlas model chain is empty'; exit 64; }
 
