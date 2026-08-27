@@ -1,74 +1,53 @@
 # FORGE PARITY ASSERTIONS
 
 This file is printed by `.github/scripts/forge-parity-check.sh` on every run.
-Each assertion below is enforced by automated checks in this repository.
+Every statement below describes what the deterministic parity gate actually proves today. Authenticated Forge behavior is deliberately kept separate and is never inferred from this file.
 
 ## Runtime and manifest
 
-- [x] Real Forge `manifest.yml` (no proprietary substitute) targeting
-      `runtime.name: nodejs24.x`, memory 512 MB — checked by parity script grep
-      and `scripts/static-gates.mjs`.
-- [x] Manifest modules: one `jira:adminPage` (useAsConfig + useAsGetStarted),
-      three functions, exactly one scheduled trigger (`fiveMinutes`) within the
-      five-module limit.
-- [x] `licensing.enabled: true` for self-license detection (feasibility row 14).
-- [x] Scope budget equals the verified allowlist exactly (GATE-2 / SEC-2a /
-      BLK-5). Zero write scopes. Zero admin scopes. No egress remotes.
-- [x] Latest `@forge/cli` installed in the parity image; CLI drift visible.
+- [x] Real Forge `manifest.yml` targeting `app.runtime.name: nodejs24.x` with 512 MB memory.
+- [x] Modern UI Kit admin page wiring uses a `resource`, `render: native`, and a backend resolver.
+- [x] The manifest declares exactly two Forge functions: the resolver and the scheduled scan-chunk worker.
+- [x] The scan worker has `timeoutSeconds: 900` and exactly one `scheduledTrigger` with `interval: fiveMinute`.
+- [x] `app.licensing.enabled: true` is present for self-license detection.
+- [x] Scope budget equals the verified nine-scope read-only allowlist. Zero write scopes, zero admin scopes, no egress remotes.
+- [x] The pre-registration all-zero app ARI is accepted only as the explicit sentinel; the authenticated live gate must replace and persist it through `forge register` before deploy.
+- [x] Deterministic parity does **not** claim authenticated `forge lint`. Authenticated lint belongs to the authenticated CI/live gate when Forge credentials and a registered app exist.
 
-## One pipeline, two transports (adapter rule)
+## One pipeline, two transports
 
-- [x] Single scanner: `ScanService` + pure pipeline consume ONLY the
-      Atlas-owned `AtlassianGateway` interface.
-- [x] `ForgeAtlassianGateway` (production, lazy `@forge/api`) and
-      `FixtureAtlassianGateway` (deterministic) are the only two conformers.
-- [x] Both parse responses through shared adapters; AC10 equivalence test
-      proves byte-identical final reports from both transports.
-- [x] No demo scanner, no demo business logic, no mode conditionals in
-      normalization/evidence/risk/finance/recommendation/UI-model modules
-      (AC10 static check).
-- [x] Engine tree contains no sample-data literals (FIX-6/GATE-4); production
-      entrypoints cannot import the sample transport or dev harness (ADV-3).
+- [x] `ScanService` and the pure downstream pipeline consume the Atlas-owned `AtlassianGateway` interface.
+- [x] `ForgeAtlassianGateway` and `FixtureAtlassianGateway` are the production and deterministic transports.
+- [x] Both pass through shared adapters; the parity-equivalence test proves equivalent final reports for equivalent evidence.
+- [x] No separate demo scanner or demo business logic exists in normalization, evidence, risk, finance, recommendation, or UI-model code.
+- [x] Production entrypoints cannot import the fixture transport or development harness.
 
 ## Honest-data semantics
 
-- [x] Partial scans: per-stream OK/DEGRADED/FAILED telemetry travels into the
-      report; PARTIAL status persists until a complete scan succeeds (BLK-4,
-      ERR-1, parity rules 8–9).
-- [x] Missing/malformed activity fields force UNKNOWN evidence and can never
-      produce SAFE NOW (ERR-2/ERR-6, BLK-1, parity rule 9) — tested.
-- [x] 401/403 degrade the affected stream with surfaced reasons; no synthesized
-      zeros (ERR-3) — tested.
-- [x] Retry-After honored as floor; exponential backoff with seeded jitter;
-      ceiling 4 attempts then failed-not-fatal (feasibility §5) — tested.
-- [x] Pagination honors returned sizes incl. mid-loop size change; truncated
-      continuation aborts to PARTIAL (ERR-7) — tested.
-- [x] Experimental license-metrics endpoints tolerated absent (UNKNOWN, never
-      zero) — tested via empty-tenant variant.
+- [x] Partial scans preserve per-stream OK/DEGRADED/FAILED telemetry and remain PARTIAL until a complete scan succeeds.
+- [x] Missing or malformed activity evidence forces UNKNOWN and cannot produce SAFE NOW.
+- [x] 401/403 failures degrade the affected stream without synthesized zero activity.
+- [x] Retry-After is honored as a floor; bounded exponential backoff remains tested.
+- [x] Pagination truncation or unverifiable continuation produces PARTIAL rather than a fabricated COMPLETE scan.
+- [x] Optional/experimental license evidence can be absent without being interpreted as zero.
 
 ## Money discipline
 
-- [x] Progressive-band golden case ($3,175.00/month @ 450 seats) is an
-      automated test (AC4).
-- [x] Scenario deltas only; boundary crossings detected and called out;
-      MQB timing labels; annual tiers realize at renewal (AC5) — tested.
-- [x] Exact integer-cent arithmetic; aggregates exact-sum-then-round-down-once;
-      per-item display floors never exceed hero (FP-S3/S4) — tested.
-- [x] Only the golden-anchored price dataset is SOURCED; everything else is
-      PRICING_UNKNOWN → quote-required (BLK-7 protection, see
-      docs/API_FEASIBILITY_ADDENDUM.md A5).
+- [x] Progressive-band pricing has golden regression vectors.
+- [x] Savings are scenario deltas with boundary/timing assumptions surfaced.
+- [x] Integer-cent arithmetic and aggregate flooring prevent displayed subitems from exceeding the hero total.
+- [x] Unsupported price surfaces remain `PRICING_UNKNOWN` / quote-required rather than guessed.
 
 ## Fixture visibility
 
-- [x] Fixture runs stamp `dataMode=FIXTURE` on report, recommendations,
-      dashboard VM and exports; unmissable DEMO banner text rendered from the
-      provenance field (FIX-2/FIX-3) — tested.
-- [x] Fixture identities use `fixture-*` account ids and tenant
-      `ATLAS PARITY DEMO`; `[FIXTURE]` log prefix applied by the dev harness.
+- [x] Fixture runs stamp `dataMode=FIXTURE` through reports, recommendations, dashboard models, and exports.
+- [x] Fixture identities and tenant labels are visibly synthetic and cannot be mistaken for a live Atlassian scan.
 
 ## Container guarantees
 
-- [x] Tests execute inside Node 24, 512 MB memory, 512 MB `/tmp`,
-      `--network=none` (this script). No runtime dependence on public internet.
-- [x] 60k-user × 120k-hit stress derivation completes well under the memory
-      budget (ADV-5/GATE-8) — tested.
+- [x] Parity tests run inside Node 24 with a 512 MB process/container budget, 512 MB `/tmp`, and `--network=none`.
+- [x] The 60k-user × 120k-hit stress derivation completes under the Forge memory budget.
+
+## Boundary of proof
+
+`FORGE_PARITY_GATE=PASS` means the deterministic Forge-shaped product is internally consistent under these constraints. It does **not** mean the app has been authenticated, deployed, installed, or exercised against a real Jira tenant. Those claims require the live gate and the real-environment verification checklist.
