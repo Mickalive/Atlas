@@ -2,8 +2,10 @@
 set -uo pipefail
 
 REAL="${OPENCODE_BIN:-$HOME/.opencode/bin/opencode}"
-MAX_ATTEMPTS="${OPENCODE_MAX_ATTEMPTS:-3}"
-RETRY_DELAY="${OPENCODE_RETRY_DELAY_SECONDS:-60}"
+MAX_ATTEMPTS="${OPENCODE_MAX_ATTEMPTS:-4}"
+BASE_RETRY_DELAY="${OPENCODE_RETRY_DELAY_SECONDS:-30}"
+MAX_RETRY_DELAY="${OPENCODE_MAX_RETRY_DELAY_SECONDS:-180}"
+RETRY_JITTER="${OPENCODE_RETRY_JITTER_SECONDS:-30}"
 INACTIVITY_LIMIT="${OPENCODE_INACTIVITY_WATCHDOG_SECONDS:-300}"
 WATCH_INTERVAL="${OPENCODE_WATCHDOG_POLL_SECONDS:-15}"
 LOG="$(mktemp)"
@@ -85,6 +87,21 @@ run_with_inactivity_watchdog() {
   wait "$pid"
 }
 
+retry_delay_for_attempt() {
+  local n="$1" delay="$BASE_RETRY_DELAY" i jitter=0
+  for ((i=1; i<n; i++)); do
+    delay=$((delay * 2))
+    if (( delay >= MAX_RETRY_DELAY )); then
+      delay="$MAX_RETRY_DELAY"
+      break
+    fi
+  done
+  if (( RETRY_JITTER > 0 )); then
+    jitter=$((RANDOM % (RETRY_JITTER + 1)))
+  fi
+  echo $((delay + jitter))
+}
+
 validate_agent_registry "$@" || exit $?
 
 attempt=1
@@ -105,8 +122,9 @@ while (( attempt <= MAX_ATTEMPTS )); do
   if [[ "$rc" -eq 124 ]] || grep -Eiq "$TRANSIENT_RE" "$LOG"; then
     echo "ATLAS_TRANSIENT_OX_DETECTED attempt=$attempt rc=$rc" >&2
     if (( attempt < MAX_ATTEMPTS )); then
-      echo "::warning::Transient OpenCode/provider/network/inactivity failure; retrying after ${RETRY_DELAY}s."
-      sleep "$RETRY_DELAY"
+      delay=$(retry_delay_for_attempt "$attempt")
+      echo "::warning::Transient OpenCode/provider/network/inactivity failure; retrying after ${delay}s (exponential backoff + jitter)."
+      sleep "$delay"
       attempt=$((attempt + 1))
       continue
     fi
