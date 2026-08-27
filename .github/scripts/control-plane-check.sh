@@ -7,80 +7,60 @@ fail() {
 }
 
 FACTORY='.github/workflows/atlas-factory.yml'
-WATCHDOG='.github/workflows/atlas-watchdog.yml'
-SUPERVISOR='.github/workflows/atlas-factory-supervisor.yml'
+CI='.github/workflows/atlas-main-ci.yml'
 RETRY='.github/scripts/run-opencode-with-retry.sh'
 INSTALL='.github/scripts/install-opencode-with-retry.sh'
+HOUSEKEEPING='.github/scripts/atlas-housekeeping.sh'
 STATE='state/factory_direction.json'
 REGISTRY='docs/agents/AGENT_CARDS.md'
+AGENT='.opencode/agents/release_integrator.md'
 
-for f in "$FACTORY" "$WATCHDOG" "$SUPERVISOR" "$RETRY" "$INSTALL" "$STATE" "$REGISTRY"; do
+for f in "$FACTORY" "$CI" "$RETRY" "$INSTALL" "$HOUSEKEEPING" "$STATE" "$REGISTRY" "$AGENT"; do
   [[ -f "$f" ]] || fail "missing $f"
 done
 
-if grep -Eq '^  schedule:' "$FACTORY"; then
-  fail 'atlas-factory.yml contains a direct schedule; continuity must be external'
-fi
-grep -Fq "cron: '*/5 * * * *'" "$WATCHDOG" || fail 'watchdog is not scheduled every five minutes'
-grep -Fq "cron: '*/5 * * * *'" "$SUPERVISOR" || fail 'continuity supervisor is not scheduled every five minutes'
+[[ ! -e '.github/workflows/atlas-factory-supervisor.yml' ]] || fail 'obsolete supervisor workflow still exists'
+[[ ! -e '.github/workflows/atlas-watchdog.yml' ]] || fail 'obsolete watchdog workflow still exists'
 
-# MARKETPLACE_READY is the only legal autonomous stop. Supervisor is primary;
-# watchdog is an independent delayed continuity fallback.
-grep -Fq "STATUS\" == 'MARKETPLACE_READY'" "$SUPERVISOR" || fail 'supervisor lacks Marketplace-ready stop condition'
-grep -Fq 'ATLAS_CONTINUITY=DISPATCH_FRESH_CYCLE' "$SUPERVISOR" || fail 'supervisor lacks fresh-cycle recovery path'
-grep -Fq 'ATLAS_CONTINUITY=STATE_SELF_HEALED' "$SUPERVISOR" || fail 'supervisor cannot self-heal unfinished state'
-grep -Fq 'ATLAS_WATCHDOG=BACKUP_CONTINUITY_DISPATCH' "$WATCHDOG" || fail 'watchdog lacks independent continuity fallback'
-grep -Fq 'dispatching fresh cycle' "$WATCHDOG" || fail 'watchdog exhaustion can still become terminal'
-if grep -Eiq '(24h autonomous cycle cap|runaway busywork|RECENT.*-ge)' "$SUPERVISOR"; then
-  fail 'supervisor contains a run cap that can permanently stop unfinished work'
-fi
+workflow_count=$(find .github/workflows -maxdepth 1 -type f -name '*.yml' | wc -l | tr -d ' ')
+[[ "$workflow_count" -eq 2 ]] || fail "expected exactly 2 workflows, found $workflow_count"
 
-# Factory itself must preserve late-cycle progress and resume it.
-grep -Fq 'factory/continuation' "$FACTORY" || fail 'factory lacks durable continuation checkpoint'
-grep -Fq 'ATLAS_CONTINUATION_CHECKPOINT=RESUMED' "$FACTORY" || fail 'builder lacks continuation resume path'
-grep -Fq 'Persist resumable integration checkpoint' "$FACTORY" || fail 'integrator does not persist WIP before hard gates'
+grep -Fq "cron: '*/5 * * * *'" "$FACTORY" || fail 'factory is not the five-minute heartbeat'
+grep -Fq 'group: atlas-product-factory' "$FACTORY" || fail 'factory concurrency group missing'
+grep -Fq 'cancel-in-progress: false' "$FACTORY" || fail 'factory may cancel its own active cycle'
+grep -Fq 'bash .github/scripts/atlas-housekeeping.sh' "$FACTORY" || fail 'factory does not clean obsolete automation history'
+grep -Fq 'bash .github/scripts/install-opencode-with-retry.sh' "$FACTORY" || fail 'factory lost resilient OpenCode installer'
+grep -Fq 'run-opencode-with-retry.sh run' "$FACTORY" || fail 'factory lost bounded OpenCode retry wrapper'
+grep -Fq -- '--agent release_integrator' "$FACTORY" || fail 'factory does not use sole canonical product worker'
+grep -Fq 'WAITING_FORGE_CREDENTIALS_NO_OX_CALL' "$FACTORY" || fail 'credential-wait mode can still waste Ox calls'
+grep -Fq 'ATLAS_FORGE_REGISTRATION=PERSISTED' "$FACTORY" || fail 'Forge registration id is not persisted before deploy'
 
-install_steps=$(grep -Fc -- '- name: Install OpenCode' "$FACTORY" || true)
-helper_calls=$(grep -Fc 'bash .github/scripts/install-opencode-with-retry.sh' "$FACTORY" || true)
-[[ "$install_steps" -gt 0 ]] || fail 'factory contains no OpenCode install steps'
-[[ "$install_steps" -eq "$helper_calls" ]] || fail "OpenCode install helper mismatch: steps=$install_steps helper_calls=$helper_calls"
-
-for sig in 'unexpected server error' 'endpoint is unavailable' 'upstream request failed' 'UnknownError'; do
-  grep -Fiq "$sig" "$RETRY" || fail "retry wrapper lost Ox signature: $sig"
-  grep -Fiq "$sig" "$WATCHDOG" || fail "watchdog lost Ox signature: $sig"
+for obsolete in 'api_architect' 'market_product_architect' 'security_test_architect' 'implementation_builder' 'functional_redteam' 'security_redteam' 'factory/continuation' '/candidate'; do
+  if grep -Fq "$obsolete" "$FACTORY"; then
+    fail "factory still contains obsolete layer: $obsolete"
+  fi
 done
 
-grep -Fq 'ATLAS_TRANSIENT_OX_INSTALL_EXHAUSTED' "$INSTALL" || fail 'installer lacks explicit transient exhaustion marker'
-grep -Fq 'ATLAS_TRANSIENT_OX_INSTALL_EXHAUSTED' "$WATCHDOG" || fail 'watchdog does not recognize installer exhaustion marker'
+agent_files=$(find .opencode/agents -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' ')
+[[ "$agent_files" -eq 1 ]] || fail "expected one OpenCode agent, found $agent_files"
+card_count=$(grep -Fc '<!-- AGENT_CARD: release_integrator ' "$REGISTRY" || true)
+[[ "$card_count" -eq 1 ]] || fail "release_integrator card count=$card_count expected=1"
+all_cards=$(grep -Fc '<!-- AGENT_CARD:' "$REGISTRY" || true)
+[[ "$all_cards" -eq 1 ]] || fail "expected one canonical agent card, found $all_cards"
 
-grep -Fq 'Persist vetted release candidate' "$FACTORY" || fail 'vetted candidate persist step missing'
-grep -A2 -F 'Persist vetted release candidate' "$FACTORY" | grep -Fq 'if: success()' || fail 'canonical candidate can be persisted after failed gates'
-grep -Fq 'ATLAS_FORGE_REGISTRATION_REQUIRED' "$FACTORY" || fail 'live gate lacks missing-app-id registration path'
+for sig in 'unexpected server error' 'endpoint is unavailable' 'upstream request failed' 'UnknownError'; do
+  grep -Fiq "$sig" "$RETRY" || fail "retry wrapper lost transient Ox signature: $sig"
+done
+grep -Fq 'ATLAS_TRANSIENT_OX_INSTALL_EXHAUSTED' "$INSTALL" || fail 'installer lacks explicit transient failure marker'
 
-# Factory may never intentionally park an unfinished state.
-if grep -Eq 'release_status=\"LIVE_DEV_VERIFIED\"[^\n]*continue=false|PARITY_READY_AWAITING_CREDENTIALS[^\n]*continue=false' "$FACTORY"; then
-  fail 'factory writes continue=false before Marketplace readiness'
-fi
+grep -Fq '.github/workflows/atlas-factory.yml' "$HOUSEKEEPING" || fail 'housekeeping lost factory allowlist'
+grep -Fq '.github/workflows/atlas-main-ci.yml' "$HOUSEKEEPING" || fail 'housekeeping lost CI allowlist'
 
 jq -e '.release_status and (.continue|type=="boolean") and .reason and .next_focus and .updated_at' "$STATE" >/dev/null || fail 'invalid factory_direction.json schema'
 jq -e '.release_status=="BUILDING" or .release_status=="PARITY_READY_AWAITING_CREDENTIALS" or .release_status=="LIVE_DEV_VERIFIED" or .release_status=="MARKETPLACE_READY" or .release_status=="BLOCKED_HUMAN"' "$STATE" >/dev/null || fail 'unknown release_status'
-jq -e 'if .release_status=="MARKETPLACE_READY" then .continue==false else .continue==true end' "$STATE" >/dev/null || fail 'unfinished product state is allowed to stop autonomous continuation'
+jq -e 'if .release_status=="MARKETPLACE_READY" then .continue==false else .continue==true end' "$STATE" >/dev/null || fail 'invalid continue flag for release status'
 if [[ "$(jq -r '.release_status' "$STATE")" != 'MARKETPLACE_READY' ]]; then
-  test -n "$(jq -r '.next_focus // empty' "$STATE")" || fail 'unfinished product state lacks next_focus'
+  test -n "$(jq -r '.next_focus // empty' "$STATE")" || fail 'unfinished state lacks next_focus'
 fi
-
-bad=0
-while IFS= read -r file; do
-  id="${file#.opencode/agents/}"; id="${id%.md}"
-  count=$(grep -Fc "<!-- AGENT_CARD: ${id} " "$REGISTRY" || true)
-  if [[ "$count" -ne 1 ]]; then
-    echo "::error::Agent $id has $count canonical cards; expected 1" >&2
-    bad=1
-  fi
-done < <(find .opencode/agents -type f -name '*.md' | sort)
-while IFS= read -r id; do
-  [[ -f ".opencode/agents/${id}.md" ]] || { echo "::error::Orphan agent card $id" >&2; bad=1; }
-done < <(grep '^<!-- AGENT_CARD:' "$REGISTRY" | awk '{print $3}')
-[[ "$bad" -eq 0 ]] || fail 'agent registry mismatch'
 
 echo 'ATLAS_CONTROL_PLANE=PASS'
