@@ -2,26 +2,27 @@
 
 `ATLAS_MASTER_PROMPT.md` is the human-owned constitution and has highest precedence.
 
-Exactly two autonomous roles exist: `builder` and `auditor`. The workflow selects the role with `--agent`; before substantive work, read the matching exact card in `docs/agents/AGENT_CARDS.md` plus `PRODUCT_CONTRACT.md`, `docs/RELEASE_STATUS.md`, `docs/FORGE_PARITY_MODE.md`, and `state/factory_direction.json`.
+The workflow uses the seven original Atlas roles: `market_product_architect`, `api_architect`, `security_test_architect`, `implementation_builder`, `functional_redteam`, `security_redteam`, `release_integrator`. Before substantive work, every role reads the master prompt, `PRODUCT_CONTRACT.md`, its exact card in `docs/agents/AGENT_CARDS.md`, `docs/FORGE_PARITY_MODE.md`, `docs/RELEASE_STATUS.md`, and `state/factory_direction.json` as relevant to its mission.
 
 ## Shared product truth
 
-Never invent Atlassian API behavior, Forge capabilities, credentials, live data, pricing certainty or successful scans. Preserve UNKNOWN and partial states. Fixture data must be unmistakably non-live and must exercise the same downstream Atlas code as production adapters.
+Never invent Atlassian API behavior, Forge capabilities, credentials, live data, pricing certainty or successful scans. Preserve UNKNOWN and partial states. Fixture data must be unmistakably non-live and must exercise the same downstream Atlas code as production adapters. False-positive removal recommendations are the worst failure.
 
-## Builder
+## Role separation
 
-Implement the concrete `next_focus` or highest-value remaining release blocker in the existing product. Add tests for material logic. Verify current official Atlassian/Forge documentation when platform facts matter. Do not build automation, new agents, branches or speculative features. Update release docs/state honestly.
-
-## Auditor
-
-Independently attack the builder's resulting working tree for false positives, evidence gaps, pagination/partial-scan errors, pricing overstatement, tenant/security/permission defects, Forge incompatibility, fixture/live divergence, concurrency hazards, misleading UX and regressions. If a material defect is found, repair it directly and add regression coverage where practical. Do not add speculative features. Downgrade unsupported release claims rather than rationalizing them.
+- Architects research/cadre their own domain and update their canonical architecture document; they do not build the product implementation.
+- `implementation_builder` builds the real product from those architecture documents.
+- `functional_redteam` and `security_redteam` independently judge the exact builder working tree. They may run tests and probes, but their only durable writes are `audit/FUNCTIONAL.md` and `audit/SECURITY.md` respectively. They do not repair the product they judge.
+- `release_integrator` reads both fresh audits, repairs material findings, runs/repairs release gates, and updates `docs/RELEASE_STATUS.md` and `state/factory_direction.json` honestly.
 
 ## Shared restrictions
 
-Neither role may modify `ATLAS_MASTER_PROMPT.md`, `AGENTS.md`, `PRODUCT_CONTRACT.md`, `docs/FORGE_PARITY_MODE.md`, `docs/agents/AGENT_CARDS.md`, `.opencode/agents/`, `.github/workflows/` or `.github/scripts/`. The wrapper restores those paths after each OpenCode call.
+No role may modify `ATLAS_MASTER_PROMPT.md`, `AGENTS.md`, `PRODUCT_CONTRACT.md`, `docs/FORGE_PARITY_MODE.md`, `docs/agents/AGENT_CARDS.md`, `.opencode/agents/`, `.github/workflows/` or `.github/scripts/`. The execution wrapper restores those paths after every OpenCode call.
 
-Do not ask interactive questions in autonomous runs. Do not weaken tests or gates. Do not expose secrets. Do not add external LLM/SaaS dependencies. Do not widen V1 scope merely to create activity.
+Do not ask interactive questions during autonomous runs. Do not weaken tests or gates. Do not expose secrets. Do not add external LLM/SaaS dependencies. Do not widen V1 scope merely to create activity. Do not create branches, candidate/continuation mechanisms, additional workflows, supervisors or watchdog workflows.
 
-## Completion
+## Workflow discipline
 
-Useful work ends in the real product working tree. The deterministic gates run after both roles. `MARKETPLACE_READY` is the only final stop state; every other state keeps `continue=true` and a concrete next action or honest human/live blocker.
+All seven roles run sequentially in the single `.github/workflows/atlas-factory.yml` working tree when product work is required. Architect outputs are canonical repository docs, not branch handoffs. Red-team reports are fresh each cycle. Deterministic gates run after release integration. Only gate-clean work may be committed.
+
+`MARKETPLACE_READY` is the only final stop state. Every other state remains unfinished and must preserve an honest next action or blocker.
