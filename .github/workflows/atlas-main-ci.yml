@@ -1,4 +1,4 @@
-name: Atlas Main Deterministic Audit
+name: Atlas Deterministic CI
 
 on:
   workflow_dispatch:
@@ -14,66 +14,53 @@ on:
       - 'tsconfig.json'
       - 'tsconfig.frontend.json'
       - 'state/**'
-      - 'docs/agents/**'
-      - 'docs/FORGE_PARITY_MODE.md'
+      - 'docs/**'
       - '.opencode/agents/**'
       - '.github/scripts/**'
       - '.github/workflows/**'
+      - 'ATLAS_MASTER_PROMPT.md'
+      - 'AGENTS.md'
+      - 'PRODUCT_CONTRACT.md'
       - 'forge-local/**'
 
 permissions:
   contents: read
 
 concurrency:
-  group: atlas-main-deterministic-audit
+  group: atlas-deterministic-ci
   cancel-in-progress: true
 
 jobs:
-  control_plane:
-    name: CONTROL PLANE STATIC AUDIT
+  deterministic:
+    name: DETERMINISTIC PRODUCT GATES
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v6
-      - name: Validate control-plane invariants
-        run: bash .github/scripts/control-plane-check.sh
-
-  host_product_gates:
-    name: HOST PRODUCT GATES
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: npm
+      - name: Validate simple control plane
+        run: bash .github/scripts/control-plane-check.sh
       - name: Install dependencies
         run: npm ci
-      - name: Unit and integration tests
+      - name: Product tests
         run: npm test
       - name: Backend and UI Kit typecheck
         run: npm run typecheck
-      - name: Static gates
+      - name: Static product and Marketplace gates
         run: npm run lint
       - name: High and critical dependency advisory gate
         run: npm run audit:high
       - name: Build gate
         run: npm run build
-
-  forge_parity:
-    name: FORGE PARITY GATE
-    needs: [control_plane, host_product_gates]
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v6
-      - name: Run isolated Node 24 / 512MB Forge parity gate
+      - name: Isolated Forge parity gate
         run: bash .github/scripts/forge-parity-check.sh
 
   authenticated_forge_lint:
     name: AUTHENTICATED FORGE LINT WHEN AVAILABLE
-    needs: [host_product_gates]
+    needs: [deterministic]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -84,7 +71,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
-      - name: Run real Forge lint on a registered app when credentials exist
+      - name: Lint registered app when credentials exist
         shell: bash
         run: |
           set -euo pipefail
@@ -93,7 +80,7 @@ jobs:
             exit 0
           fi
           if ! grep -Eq '^[[:space:]]+id:[[:space:]]*ari:cloud:ecosystem::app/' manifest.yml || grep -Eq 'ari:cloud:ecosystem::app/0{8}-0{4}-0{4}-0{4}-0{12}|ATLAS_PLACEHOLDER' manifest.yml; then
-            echo 'FORGE_AUTHENTICATED_LINT=SKIPPED_UNREGISTERED_APP; live gate owns register + lint'
+            echo 'FORGE_AUTHENTICATED_LINT=SKIPPED_UNREGISTERED_APP'
             exit 0
           fi
           npm install -g @forge/cli@latest
