@@ -4,13 +4,12 @@ Updated: 2026-08-27
 
 Status: **PARITY_READY_AWAITING_CREDENTIALS**
 
-Atlas is a Forge-shaped, read-only Atlassian Renewal FinOps V1 whose primary output is **ESTIMATED ANNUAL SAVINGS**. The product contract remains unchanged: SAFE NOW / REVIEW / KEEP / UNKNOWN, missing evidence is UNKNOWN, false-positive removal recommendations are the worst failure, partial scans stay visibly partial, and unsupported pricing is never guessed.
+Atlas is a Forge-shaped, read-only Atlassian Renewal FinOps V1 whose primary output is **ESTIMATED ANNUAL SAVINGS**. Product truth remains unchanged: SAFE NOW / REVIEW / KEEP / UNKNOWN, missing evidence is UNKNOWN, false-positive removal recommendations are the worst failure, partial scans stay visibly partial, and unsupported pricing is never guessed.
 
-## Current deterministic proof
+## Current deterministic product proof
 
-The rebuilt control plane was validated on GitHub Actions run `33067877466` at commit `7c74838f5580f8fd2c9c141c1add3113304c5e3d`:
+The most recent complete deterministic product validation is GitHub Actions run `33067877466` at commit `7c74838f5580f8fd2c9c141c1add3113304c5e3d`:
 
-- simple control-plane gate: PASS;
 - `npm ci`: PASS;
 - unit/integration suite: **127/127 tests, 15/15 files PASS**;
 - backend TypeScript check: PASS;
@@ -20,32 +19,13 @@ The rebuilt control plane was validated on GitHub Actions run `33067877466` at c
 - build gate: PASS;
 - isolated Forge parity gate: **FORGE_PARITY_GATE=PASS** under Node 24, 512 MB and `--network=none`.
 
-The dependency tree currently reports eight **moderate** advisories through Atlaskit/Forge dependencies. The high/critical gate is green. `npm audit fix --force` is deliberately not applied because npm proposes a breaking dependency change; this remains a dependency-maintenance item, not a reason to weaken or destabilize the release candidate.
+Those product tests/gates were not weakened during the factory rebuild. The dependency tree reports eight moderate advisories through Atlaskit/Forge dependencies; the high/critical gate is green. `npm audit fix --force` remains deliberately avoided because npm proposes breaking dependency changes.
 
 ## Product correctness retained
 
-The existing regression suite covers, among other things:
-
-- false-positive removal classification;
-- missing/malformed evidence → UNKNOWN;
-- 401/403 and repeated 5xx degraded scans;
-- 429 recovery and Retry-After handling;
-- pagination truncation and unverifiable continuation;
-- org-wide versus product-specific activity recency;
-- partial-drain behavior that prevents fake SAFE NOW savings;
-- pricing golden vectors, band boundaries and exact-cent aggregation;
-- total-population versus card-cap accounting;
-- CSV/export hygiene and formula-injection neutralization;
-- tenant isolation and log secret scrubbing;
-- scan leases/concurrency best-effort protection;
-- fixture/live-shaped transport equivalence;
-- 60k users × 120k activity hits inside the 512 MB Forge budget.
-
-Historical defect details remain recoverable in git history and the audit documents; this status file records current release truth rather than preserving obsolete factory topology.
+The regression suite covers false-positive removal classification, missing/malformed evidence → UNKNOWN, 401/403 and repeated 5xx degradation, 429/Retry-After recovery, pagination truncation, org-vs-product activity recency, partial-drain safety, pricing golden vectors/band boundaries/exact cents, totals/card-cap accounting, export hygiene/formula injection, tenant isolation, log secret scrubbing, scan lease/concurrency best effort, fixture/live-shaped transport equivalence, and 60k users × 120k activity hits under the 512 MB Forge budget.
 
 ## Forge parity boundary
-
-Deterministic parity proves the actual repository manifest and product architecture are internally consistent with the intended Forge deployment shape. It does **not** claim authenticated Forge behavior.
 
 Current manifest shape:
 
@@ -59,41 +39,53 @@ Current manifest shape:
 - zero write scopes, zero admin scopes, no egress remotes;
 - all-zero app ARI only as the explicit pre-registration sentinel.
 
-Authenticated `forge lint` is intentionally separated from offline parity. The authenticated CI/live gate must replace the sentinel with the real app ARI via `forge register`, persist it, lint, deploy to development and install on the target Jira site before any live claim is made.
+Offline parity does not claim authenticated Forge behavior. The live gate must register the app if needed, persist the real ARI, run authenticated `forge lint`, deploy to development and install on the target Jira site before any live claim.
 
 ## Real-environment checklist still required
 
-Once the repository secrets and target site exist, retire these UNKNOWNs with sourced/live evidence:
+Once repository secrets and a target site exist, retire these UNKNOWNs with live evidence:
 
 1. authenticated Forge registration, lint, development deploy and Jira install;
-2. actual acceptance of every required Jira/Confluence scope under installed-app identity;
-3. live pagination and continuation shapes for the production endpoints;
-4. tenant-context derivation consistency between resolver and scheduled-trigger contexts;
-5. direct resolver accessibility by non-admin users and explicit server-side permission enforcement if needed;
+2. actual acceptance of required Jira/Confluence scopes under installed-app identity;
+3. live pagination/continuation shapes;
+4. tenant-context consistency between resolver and scheduled-trigger contexts;
+5. resolver accessibility/authorization for non-admin users;
 6. Forge KVS behavior under concurrent lease/checkpoint access;
-7. end-to-end real tenant scan with manual spot checks against classifications and savings;
+7. end-to-end real tenant scan with manual spot checks of classifications and savings;
 8. final Marketplace/security/privacy packaging.
 
-## Control plane after the 2026-08-27 reset
+## Current factory architecture
 
-The previous multi-agent factory topology has been retired. Atlas now has exactly:
+The automation was rebuilt to preserve the original specialist team while removing orchestration layers.
 
-- one scheduled product workflow: `.github/workflows/atlas-factory.yml`;
-- one deterministic CI workflow: `.github/workflows/atlas-main-ci.yml`;
-- one autonomous product role: `release_integrator`.
+There is exactly **one** workflow: `.github/workflows/atlas-factory.yml`, scheduled every five minutes and serialized with one concurrency group.
 
-The Factory is the single five-minute heartbeat. It is serialized and does not cancel an active cycle. Ox/provider/network failures receive bounded internal retries. A silent Ox call is killed after five minutes of inactivity and treated as transient. If retries are exhausted, the next scheduled Factory cycle is the retry — there is no Supervisor or separate Watchdog racing it.
+When product work is required, it runs the original seven roles sequentially on the same working tree:
 
-When state is `PARITY_READY_AWAITING_CREDENTIALS` and Forge credentials/site are missing, the Factory exits cleanly **without calling Ox**. This is deliberate: the deterministic product is already gate-clean, and manufacturing more autonomous work merely to keep the factory busy would be fake progress.
+`market_product_architect → api_architect → security_test_architect → implementation_builder → functional_redteam → security_redteam → release_integrator → deterministic gates → commit`
+
+The red teams remain genuinely independent: they write fresh audit reports and do not repair the product they judge. `release_integrator` consumes both reports and performs repairs. No role branch, candidate branch, continuation branch, Supervisor, separate Watchdog or secondary CI workflow is part of the current architecture.
+
+Only three technical helpers remain: resilient OpenCode installation, one OpenCode-call retry/inactivity wrapper, and the Forge parity script. The five-minute schedule itself is the recovery heartbeat.
+
+The new single-workflow topology must not be called runtime-verified until a run using the rebuilt YAML is actually observed. Its repository structure and agent registry are currently consistent: one workflow and seven exact canonical agent definitions/cards.
+
+## State behavior
+
+- `BUILDING` / `LIVE_DEV_VERIFIED`: run the complete seven-role cycle and gates.
+- `PARITY_READY_AWAITING_CREDENTIALS`: without Forge credentials/site, make no Ox call and re-check on the next heartbeat; with credentials, execute the authenticated Forge gate.
+- `BLOCKED_HUMAN`: do not invent human evidence; re-check on the heartbeat.
+- `MARKETPLACE_READY`: final stop.
 
 ## Honest residuals
 
-- **Not Marketplace-ready yet:** authenticated Forge/live Jira proof is still missing.
+- **Not Marketplace-ready:** authenticated Forge/live Jira proof is missing.
 - Eight moderate dependency advisories remain; no high/critical advisory currently fails the release gate.
-- The repository is currently public and branch protection has not been certified as active; this is a repository-security/configuration residual separate from product correctness.
+- The repository is public and branch protection has not been certified as active.
 - The best-effort KVS scan lease cannot be called race-proof until live Forge concurrency semantics are observed.
 - Per-item pricing can conservatively understate simultaneous removals that cross pricing-band boundaries; it must not be represented as exact billing truth.
+- A stale historical `factory/continuation` branch still exists at GitHub-ref level; current automation neither reads nor writes it. It should be deleted when a branch-delete capability is available. It is not part of product state or execution.
 
 ## Machine direction
 
-`state/factory_direction.json` remains `PARITY_READY_AWAITING_CREDENTIALS` with `continue=true` because `MARKETPLACE_READY` is the only final stop state. The concrete next action is the authenticated Forge/live verification path when credentials become available; until then the factory should keep deterministic CI green and make no Ox call.
+`state/factory_direction.json` is `PARITY_READY_AWAITING_CREDENTIALS` with `continue=true`. The concrete next action is authenticated Forge/live verification when credentials become available; until then the single factory should wake on schedule, make no Ox call, and exit cleanly.
