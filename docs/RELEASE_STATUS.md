@@ -1,244 +1,99 @@
-# RELEASE STATUS — release_integrator, cycle 2026-08-26
+# ATLAS — CURRENT RELEASE STATUS
 
-Status: **RELEASE CANDIDATE — parity gates PASS; awaiting live Atlassian
-credentials.** `state/factory_direction.json` is set accordingly.
+Updated: 2026-08-27
 
-- Input snapshot: git `40ffe57` ("Atlas V1 build 32922567715").
-- Repair inputs: `.factory-inputs/audits/FUNCTIONAL.md` (2 BLOCKER, 3 HIGH,
-  4 MEDIUM, 3 LOW) and `.factory-inputs/audits/SECURITY.md` (2 HIGH, 5 MEDIUM,
-  4 LOW, no BLOCKER). Both audits were produced independently against the
-  exact builder snapshot; this file records the single repair/integration
-  pass performed after both.
-- Scope discipline: no product scope was widened, no audit finding erased,
-  no test weakened, no live success invented. Existing 97 tests all still
-  pass unmodified in their assertions; every repair adds regression coverage
-  (127 tests total across 15 files now).
+Status: **PARITY_READY_AWAITING_CREDENTIALS**
 
----
+Atlas is a Forge-shaped, read-only Atlassian Renewal FinOps V1 whose primary output is **ESTIMATED ANNUAL SAVINGS**. The product contract remains unchanged: SAFE NOW / REVIEW / KEEP / UNKNOWN, missing evidence is UNKNOWN, false-positive removal recommendations are the worst failure, partial scans stay visibly partial, and unsupported pricing is never guessed.
 
-## 1. Verification evidence (re-executed by Release Integrator)
+## Current deterministic proof
 
-| Gate | Result |
-|---|---|
-| Baseline reproduction before repairs | `npm run lint` green · `npm run typecheck` clean · `npm test` 97/97 · fixture CLI hero $309 SAFE / $412 REVIEW ($722 total) — matches both audits' recorded baseline |
-| After repairs: static gates | `npm run lint` all PASS incl. new `GATE-2/SEC-H1: every manifest scope is exercised by a real gateway call site` |
-| After repairs: typecheck | `tsc --noEmit` clean (strict) |
-| After repairs: unit/integration | `npm test` → **127 passed / 15 files** (97 pre-existing + 30 new regression tests) |
-| Fixture CLI | default variant reproduces $309/$412 exactly; org_enriched variant $412/$309 |
-| Forge parity container | `bash .github/scripts/forge-parity-check.sh` → Node 24 / 512 MB / 512 MB tmpfs / `--network=none` → **FORGE_PARITY_GATE=PASS** |
-| SEC-H1 probe re-run | On a throwaway copy: adding a declared-but-zero-use scope in all three documentation locations now **FAILS** (`GATE-2/SEC-H1: ... none exist in any transport implementation`) — previously shipped green |
+The rebuilt control plane was validated on GitHub Actions run `33067877466` at commit `7c74838f5580f8fd2c9c141c1add3113304c5e3d`:
 
----
+- simple control-plane gate: PASS;
+- `npm ci`: PASS;
+- unit/integration suite: **127/127 tests, 15/15 files PASS**;
+- backend TypeScript check: PASS;
+- UI Kit/frontend TypeScript check: PASS;
+- product/static/security/Marketplace gates: PASS;
+- high/critical dependency advisory gate: PASS;
+- build gate: PASS;
+- isolated Forge parity gate: **FORGE_PARITY_GATE=PASS** under Node 24, 512 MB and `--network=none`.
 
-## 2. Functional audit findings — disposition
+The dependency tree currently reports eight **moderate** advisories through Atlaskit/Forge dependencies. The high/critical gate is green. `npm audit fix --force` is deliberately not applied because npm proposes a breaking dependency change; this remains a dependency-maintenance item, not a reason to weaken or destabilize the release candidate.
 
-### BLOCKER 1 — fabricated "measured absence" from live-shaped Confluence evidence → FIXED
-Root cause chain broken at every link:
-1. `searchConfluenceContributions` no longer builds Wire hits inline with
-   `lastModified: null`. Parsing happens ONLY through shared adapters
-   (`parseWireContributionItem`, which preserves `version.when`; identity
-   attribution via `attributedContribution`). The CQL is window-filtered by
-   construction, so any returned hit IS within-window activity and its
-   timestamp survives.
-2. `buildContributionMap` additionally treats a real content hit with an
-   unusable temporal field as UNVERIFIABLE (entry.complete=false), never as
-   absence; zero-hit sentinels (contentId=null) remain the only absence proof.
-3. Regression: `test/live-shape-parity.test.ts` feeds raw HTTP-shaped JSON
-   through `ForgeAtlassianGateway`'s injected transport and drives the REAL
-   ScanService pipeline: Carla (Jira hit 100d + Confluence contribution 5d,
-   production payload shape) classifies KEEP/RULE_RECENT_ACTIVITY with zero
-   "found zero observations" claims; Finn remains a legitimate
-   measured-absence SAFE_NOW; scan COMPLETE.
+## Product correctness retained
 
-### BLOCKER 2 — org-wide last-active shadows newer product-specific last-active → FIXED
-`mergedOrgLastActiveForProduct()` merges org-wide and per-product
-`last_active` by MAX recency; derive no longer takes positional `[0]`.
-Regression: `test/org-evidence.test.ts` proves the merge helper, the
-end-to-end case (org-wide 200d vs product-specific 2d ⇒ KEEP, not SAFE_NOW),
-the capability-preservation control (consistent staleness still corroborates
-to SAFE_NOW), and classifier precedence.
+The existing regression suite covers, among other things:
 
-### HIGH 3 — PARTIAL scans mint SAFE_NOW savings from half-drained sweeps → FIXED
-The `!aHasPositive(...)` escape is removed: an undrained Jira sweep forces
-`dataUnavailableReason` on EVERY jira seat (UNKNOWN via RULE_DATA_UNAVAILABLE).
-Users with genuinely recent prefix activity still KEEP via the
-conflicting-recent screen, which runs before degradation. Regression:
-`test/partial-drain.test.ts` (page1+HTTP500 ⇒ Paula UNKNOWN, safeNow totals 0;
-Rico KEEP; drained control books legitimate classifications).
+- false-positive removal classification;
+- missing/malformed evidence → UNKNOWN;
+- 401/403 and repeated 5xx degraded scans;
+- 429 recovery and Retry-After handling;
+- pagination truncation and unverifiable continuation;
+- org-wide versus product-specific activity recency;
+- partial-drain behavior that prevents fake SAFE NOW savings;
+- pricing golden vectors, band boundaries and exact-cent aggregation;
+- total-population versus card-cap accounting;
+- CSV/export hygiene and formula-injection neutralization;
+- tenant isolation and log secret scrubbing;
+- scan leases/concurrency best-effort protection;
+- fixture/live-shaped transport equivalence;
+- 60k users × 120k activity hits inside the 512 MB Forge budget.
 
-### HIGH 4 — totals contradicted card-cap invariant → FIXED
-`computeTotals` accepts authoritative population counts; derive passes its
-full-population KEEP/UNKNOWN counters. Emission cap unchanged for cards.
-Regression: `test/totals-population.test.ts` (600 KEEP + 5 UNKNOWN + 3 SAFE ⇒
-keepCount=600, unknownCount=5 regardless of sort order).
+Historical defect details remain recoverable in git history and the audit documents; this status file records current release truth rather than preserving obsolete factory topology.
 
-### HIGH 5 — responders omitting pagination silently truncate as COMPLETE → FIXED
-New explicit drain-verdict model shared by every paged step
-(`drainVerdict`/`applyPageOutcome`):
-- explicit terminal flag / empty page / short-page-vs-requested ⇒ evidenced drain;
-- full page with NO continuation fields and no position echo ⇒ stream DEGRADED
-  ("pagination continuation unverifiable"), status PARTIAL;
-- position-echoing responders are probed forward to completion; an
-  offset-ignoring responder hits the first-item fingerprint guard (bounded,
-  honest stop);
-- `metaFrom` surfaces unknown continuation as `isLast: null` instead of
-  defaulting TRUE (token-flavored endpoints keep documented
-  absence-of-token-as-end semantics, recorded in addendum A1).
-Regression: `test/truncation.test.ts` (4 cases). Also fixed en passant:
-`json.size` is page-size in wiki responses and is no longer misread as total.
+## Forge parity boundary
 
-### MEDIUM 6 — CSV TOTALS disagreed with dashboard/markdown pools → FIXED
-Exports render `report.totals` — the same single pool policy as hero and
-markdown (documented: pools include the sourced portion of partially-bounded
-cards; such rows still show QUOTE_REQUIRED per-row). Regression:
-`test/export-hygiene.test.ts`.
+Deterministic parity proves the actual repository manifest and product architecture are internally consistent with the intended Forge deployment shape. It does **not** claim authenticated Forge behavior.
 
-### MEDIUM 7 — reclaimable products exceeded measured surfaces → FIXED (labeling)
-`ClassificationResult.corroboratedProducts` carries the products where
-inactivity/activity was actually measured; `Recommendation.productsMeasured`
-plus WHAT-line annotation distinguish them from ride-along seats; markdown
-renders `(measured: …)`. CSV gains a `products_measured` column.
+Current manifest shape:
 
-### MEDIUM 8 — one-seat pricing understates multi-user batch savings across bands → NOT CHANGED (documented)
-Direction-safe systematic understatement (constitution-safe), already
-disclosed in pricing assumptions and handoff §4.5. Improving it requires
-batch-scenario pricing design, not a repair; deferred to post-live iteration.
-Edges verified correct by the functional audit itself (crossings, floors).
+- `app.runtime.name: nodejs24.x`;
+- 512 MB runtime memory;
+- `app.licensing.enabled: true`;
+- modern UI Kit Jira admin page using `resource`, `render: native`, and resolver wiring;
+- two Forge functions: resolver + scheduled scan-chunk worker;
+- scheduled worker `timeoutSeconds: 900`, interval `fiveMinute`;
+- nine verified read-only scopes;
+- zero write scopes, zero admin scopes, no egress remotes;
+- all-zero app ARI only as the explicit pre-registration sentinel.
 
-### MEDIUM 9 — no concurrency guard on chunk execution → FIXED (see SEC-H2 below)
+Authenticated `forge lint` is intentionally separated from offline parity. The authenticated CI/live gate must replace the sentinel with the real app ARI via `forge register`, persist it, lint, deploy to development and install on the target Jira site before any live claim is made.
 
-### LOW 10 — zero-seat baseline renders "10 seats (billed at minimum)" → NOT CHANGED (cosmetic)
-Delta stays $0; label-only nit inside minimum-floor no-op scenarios. Deferred
-to avoid churn in finance display math during the repair pass.
+## Real-environment checklist still required
 
-### LOW 11 — "shared adapters" parity claim false for most production endpoints → FIXED
-All paged production calls (`listJiraUsers`, `listGroups`, `listGroupMembers`,
-Confluence groups/members, `searchIssueActivity`,
-`searchConfluenceContributions`) parse through per-item shared adapters
-(`parseWireUserItem`, `parseWireGroupItem`, `parseWireConfluenceMemberItem`,
-`parseWireIssueActivityItem`, `parseWireContributionItem`). The fixture
-gateway likewise synthesizes RAW payload shapes and routes through the SAME
-adapters (also resolves SECURITY SEC-M3's fixture-side divergence, including
-symmetric `windowStartIso` honoring in fixture contributions). Inline email
-hint divergence eliminated (see SEC-L2).
+Once the repository secrets and target site exist, retire these UNKNOWNs with sourced/live evidence:
 
-### LOW 12 — dead `listUserGroups` capability + budget entry → FIXED (removed)
-Capability removed from interface and both transports; endpoint constant and
-budget references cleaned. Redundant-access detection remains out of V1 scope
-as the handoff intended.
+1. authenticated Forge registration, lint, development deploy and Jira install;
+2. actual acceptance of every required Jira/Confluence scope under installed-app identity;
+3. live pagination and continuation shapes for the production endpoints;
+4. tenant-context derivation consistency between resolver and scheduled-trigger contexts;
+5. direct resolver accessibility by non-admin users and explicit server-side permission enforcement if needed;
+6. Forge KVS behavior under concurrent lease/checkpoint access;
+7. end-to-end real tenant scan with manual spot checks against classifications and savings;
+8. final Marketplace/security/privacy packaging.
 
----
+## Control plane after the 2026-08-27 reset
 
-## 3. Security audit findings — disposition
+The previous multi-agent factory topology has been retired. Atlas now has exactly:
 
-### SEC-H1 — GATE-2 self-referential set equality → FIXED
-Gate now derives each scope's exercising call names from
-`SCOPE_BUDGET[scope].calls` in `src/gateway/types.ts` and greps transport
-sources for real call sites; missing exercise fails the build; budget scopes
-absent from the manifest also fail. `read:avatar:jira` kept WITH written
-endpoint-level justification + VERIFY-LIVE drop-condition (addendum A7).
-Probe re-run verified failing (§1 table). See addendum A8.
+- one scheduled product workflow: `.github/workflows/atlas-factory.yml`;
+- one deterministic CI workflow: `.github/workflows/atlas-main-ci.yml`;
+- one autonomous product role: `release_integrator`.
 
-### SEC-H2 / F-MEDIUM 9 — no concurrency control on scan state → FIXED (best-effort lease)
-`ScanRecord` lease is now real: acquired server-side before advancement,
-renewed each checkpoint, released at terminal states, expired leases taken
-over; foreign unexpired leases skip chunk work entirely (no appends).
-`rescan` clears stale leases (admin override). Regression:
-`test/scan-lease.test.ts` (block/no-append, takeover, terminal release,
-self-renewal). HONEST RESIDUAL: without CAS-backed KVS this narrows rather
-than eliminates the interleaving window; KVS consistency semantics under
-concurrent put/get remain UNKNOWN (audit §6.4 item) until live verification.
+The Factory is the single five-minute heartbeat. It is serialized and does not cancel an active cycle. Ox/provider/network failures receive bounded internal retries. A silent Ox call is killed after five minutes of inactivity and treated as transient. If retries are exhausted, the next scheduled Factory cycle is the retry — there is no Supervisor or separate Watchdog racing it.
 
-### SEC-M1 — logger message field bypassed scrubbing → FIXED
-Messages get the same bearer/token-pattern scrubbing as meta values.
-Regressions added to `test/logger-scrub.test.ts`.
+When state is `PARITY_READY_AWAITING_CREDENTIALS` and Forge credentials/site are missing, the Factory exits cleanly **without calling Ox**. This is deliberate: the deterministic product is already gate-clean, and manufacturing more autonomous work merely to keep the factory busy would be fake progress.
 
-### SEC-M2 — provenance stamp loss rendered banner-less → FIXED
-`showNonLiveBanner = dataMode !== 'LIVE'` with distinct UNVERIFIED-provenance
-banner text. Regression in `test/provenance-ui.test.ts`.
+## Honest residuals
 
-### SEC-M3 — paged parsing not shared-by-construction → FIXED
-See LOW 11 above; window parameter honored symmetrically.
+- **Not Marketplace-ready yet:** authenticated Forge/live Jira proof is still missing.
+- Eight moderate dependency advisories remain; no high/critical advisory currently fails the release gate.
+- The repository is currently public and branch protection has not been certified as active; this is a repository-security/configuration residual separate from product correctness.
+- The best-effort KVS scan lease cannot be called race-proof until live Forge concurrency semantics are observed.
+- Per-item pricing can conservatively understate simultaneous removals that cross pricing-band boundaries; it must not be represented as exact billing truth.
 
-### SEC-M4 (VERIFY-LIVE) — tenant namespace derivation across contexts → CHECKLIST (cannot be settled offline)
-Recorded in §5 checklist. `deriveTenantId` already fails closed when neither
-context field resolves; first-install logging of which field resolved is part
-of the live checklist.
+## Machine direction
 
-### SEC-M5 (VERIFY-LIVE) — resolver authorization rests on adminPage placement → CHECKLIST
-Non-admin resolver-invocation test required at first install; if reachable,
-add an explicit server-side permission assertion then. Not certifiable
-offline and not invented now.
-
-### SEC-L1 — CSV formula injection → FIXED
-Leading `= + - @ \t \r` cell values are apostrophe-neutralized.
-Regression in `test/export-hygiene.test.ts`.
-
-### SEC-L2 — full emails persisted; sanitization overstated → FIXED
-Adapters store LOCAL PART only (`emailHint('a@b') => 'a'`); comment updated;
-service-account heuristic unchanged (local-part markers only, verified).
-
-### SEC-L3 — dormant org-enrichment egress → UNCHANGED (correctly inert)
-Guard intact (`enabled:false`, null key resolver, undeclared remote); A3
-enable-time checklist stays BINDING (recorded in addendum).
-
-### SEC-L4 — invocation amplification → DEFERRED (documented)
-Admin-only audience mitigates; per-tenant rescan min-interval guard deferred
-to post-live hardening backlog.
-
----
-
-## 4. Additional defect found & fixed during this pass
-
-- **Production `{groupId}` literal path**: `listConfluenceGroupMembers`
-  requested `/wiki/rest/api/group/{groupId}/member?...` verbatim in
-  production (substituted path and telemetry endpoint arguments were
-  swapped). Invisible to fixture/replay tests; caught by the new
-  live-shape parity test. Fixed; recorded as addendum A9.
-- **`npm run fixture:scan` was broken** under plain Node strip-types
-  (extensionless imports); script now uses the documented tsx runner.
-- **`meta.total` misread**: wiki `size` (page size) is no longer treated as
-  collection total.
-
-## 5. VERIFY-LIVE checklist (must be retired by sourced live evidence only)
-
-Carried from feasibility §9 / addendum A1 plus audit §6 additions:
-1. Authenticated `forge lint/deploy/install` with registered app id.
-2. Exact accepted scope strings per endpoint under installed-app identity —
-   including `read:jira-work` on enhanced search (A1) and whether
-   `read:avatar:jira` is droppable (A7).
-3. `asApp()` acceptance for `/rest/api/3/users`, `/applicationrole`,
-   `/wiki/rest/api/*` at required granularities.
-4. Live pagination shapes: does `/rest/api/3/users` emit isLast/total?
-   Does enhanced search terminate by token-absence (A1 assumption)?
-5. Tenant context fields (`installationId` vs `cloudId`) availability and
-   stability across resolver AND scheduled-trigger contexts (SEC-M4); pin one
-   derivation, log resolution source tenant-safely.
-6. Direct resolver invocability by non-admin users (SEC-M5); add explicit
-   permission assertion if reachable.
-7. Forge KVS consistency semantics under concurrent put/get (settles the
-   lease residual); observe lease-skip logs under multi-tab load.
-8. Org-admin API enablement path (only when product decides): A3 binding
-   checklist (remote declaration + secret review).
-9. Real-environment scan end-to-end; confirm hero/split against manual spot
-   checks before any customer-facing claim.
-
-## 6. Honest residual limitations
-
-- Per-item money model understates simultaneous multi-user removals that
-  cross band boundaries (F-MEDIUM 8) — conservative direction, disclosed.
-- Zero-seat floor label cosmetic nit (F-LOW 10).
-- Rescan pacing budget (SEC-L4) deferred.
-- Everything in §5 is genuinely UNKNOWN until credentials exist; nothing in
-  this candidate claims live behavior.
-
-## 7. Factory direction
-
-`state/factory_direction.json`:
-`release_status=PARITY_READY_AWAITING_CREDENTIALS`, `continue=false`.
-Per canonical card: parity gates pass, no material blocker remains, and only
-real Atlassian credentials/live verification are missing. Next action on
-credential arrival: register app (`forge register` fills the manifest id),
-run authenticated lint/deploy/install, execute the §5 checklist top-down.
-
-— release_integrator, 2026-08-26
+`state/factory_direction.json` remains `PARITY_READY_AWAITING_CREDENTIALS` with `continue=true` because `MARKETPLACE_READY` is the only final stop state. The concrete next action is the authenticated Forge/live verification path when credentials become available; until then the factory should keep deterministic CI green and make no Ox call.
