@@ -1,0 +1,50 @@
+name: Atlas Cleanup Once
+
+on:
+  push:
+    paths:
+      - '.github/workflows/atlas-cleanup-once.yml'
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Purge obsolete workflows and runs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          factory_path='.github/workflows/atlas-factory.yml'
+          self_path='.github/workflows/atlas-cleanup-once.yml'
+
+          workflows=$(gh api "repos/${repo}/actions/workflows?per_page=100")
+          while read -r workflow_id; do
+            [[ -z "${workflow_id:-}" ]] && continue
+            echo "Disabling obsolete workflow id=${workflow_id}"
+            gh api --method PUT "repos/${repo}/actions/workflows/${workflow_id}/disable" >/dev/null 2>&1 || true
+          done < <(jq -r --arg factory "$factory_path" --arg self "$self_path" '.workflows[] | select(.path != $factory and .path != $self) | .id' <<< "$workflows")
+
+          runs=$(gh api "repos/${repo}/actions/runs?per_page=100")
+
+          # Delete every completed run belonging to an obsolete workflow/path.
+          while read -r run_id; do
+            [[ -z "${run_id:-}" ]] && continue
+            echo "Deleting obsolete completed run ${run_id}"
+            gh api --method DELETE "repos/${repo}/actions/runs/${run_id}" >/dev/null 2>&1 || true
+          done < <(jq -r --arg factory "$factory_path" --arg self "$self_path" '.workflow_runs[] | select(.status == "completed" and .path != $factory and .path != $self) | .id' <<< "$runs")
+
+          # For the current Factory, retain only the newest completed run as diagnostic evidence.
+          while read -r run_id; do
+            [[ -z "${run_id:-}" ]] && continue
+            echo "Deleting superseded Factory run ${run_id}"
+            gh api --method DELETE "repos/${repo}/actions/runs/${run_id}" >/dev/null 2>&1 || true
+          done < <(jq -r --arg factory "$factory_path" '[.workflow_runs[] | select(.status == "completed" and .path == $factory)] | sort_by(.created_at) | reverse | .[1:][]?.id' <<< "$runs")
+
+          echo 'ATLAS_ONE_SHOT_CLEANUP=PASS'
