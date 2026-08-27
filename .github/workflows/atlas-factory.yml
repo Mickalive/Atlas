@@ -1,447 +1,199 @@
-name: Atlas 24h Product Factory
+name: Atlas Product Factory
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '.factory/KICKOFF'
+  schedule:
+    - cron: '*/5 * * * *'
 
 permissions:
   contents: write
-  actions: read
+  actions: write
 
 concurrency:
   group: atlas-product-factory
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  cancel-in-progress: false
 
 env:
   ATLAS_MODEL: opencode/x-preview-f-free
   ATLAS_NODE_VERSION: '24'
 
 jobs:
-  control_plane_guard:
-    name: CONTROL PLANE GUARD
+  advance:
+    name: ADVANCE ATLAS
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Validate factory invariants
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.ATLAS_NODE_VERSION }}
+          cache: npm
+
+      - name: Validate simple control plane
         run: bash .github/scripts/control-plane-check.sh
 
-  api_architect:
-    name: API ARCHITECT
-    needs: [control_plane_guard]
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Prepare API lane
-        run: git switch -C "factory/${GITHUB_RUN_ID}/api"
-      - name: Install OpenCode
-        run: bash .github/scripts/install-opencode-with-retry.sh
-      - name: Research API feasibility
-        shell: bash
-        run: |
-          .github/scripts/run-opencode-with-retry.sh run \
-            --model "$ATLAS_MODEL" \
-            --agent api_architect \
-            "Produce the binding API feasibility map for the current Atlas V1. Verify current official Atlassian docs on the network; do not rely on stale memory. Read state/factory_direction.json and prioritize its next_focus when relevant. Respect docs/FORGE_PARITY_MODE.md and the canonical Atlas control plane."
-      - name: Persist API lane
-        run: |
-          git config user.name atlas-api-architect
-          git config user.email atlas-api-architect@autonomous.local
-          git add -A
-          git commit -m "API feasibility ${GITHUB_RUN_ID}" || true
-          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/api"
+      - name: Remove obsolete Atlas automation history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/atlas-housekeeping.sh
 
-  product_architect:
-    name: MARKET / PRODUCT ARCHITECT
-    needs: [control_plane_guard]
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Prepare Product lane
-        run: git switch -C "factory/${GITHUB_RUN_ID}/product"
-      - name: Install OpenCode
-        run: bash .github/scripts/install-opencode-with-retry.sh
-      - name: Freeze sellable V1
+      - name: Detect live Forge credentials without exposing them to builders
+        id: credentials
         shell: bash
-        run: |
-          .github/scripts/run-opencode-with-retry.sh run \
-            --model "$ATLAS_MODEL" \
-            --agent market_product_architect \
-            "Research the current Atlassian Marketplace and freeze the narrowest sellable V1. Read state/factory_direction.json and prioritize its next_focus when relevant. Recoup and current license optimizers are real competitors. Fixture/demo mode must be visibly non-live and cannot alter actual product logic."
-      - name: Persist Product lane
-        run: |
-          git config user.name atlas-product-architect
-          git config user.email atlas-product-architect@autonomous.local
-          git add -A
-          git commit -m "Product V1 ${GITHUB_RUN_ID}" || true
-          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/product"
-
-  security_architect:
-    name: SECURITY / TEST ARCHITECT
-    needs: [control_plane_guard]
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Prepare Security lane
-        run: git switch -C "factory/${GITHUB_RUN_ID}/security"
-      - name: Install OpenCode
-        run: bash .github/scripts/install-opencode-with-retry.sh
-      - name: Design safety gates
-        shell: bash
-        run: |
-          .github/scripts/run-opencode-with-retry.sh run \
-            --model "$ATLAS_MODEL" \
-            --agent security_test_architect \
-            "Define the least-privilege security model and false-positive test matrix for a real Marketplace release. Read state/factory_direction.json and prioritize its next_focus when relevant. Treat fixture/live separation, tenant isolation, partial scans and Forge parity constraints as release-critical."
-      - name: Persist Security lane
-        run: |
-          git config user.name atlas-security-architect
-          git config user.email atlas-security-architect@autonomous.local
-          git add -A
-          git commit -m "Security test plan ${GITHUB_RUN_ID}" || true
-          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/security"
-
-  builder:
-    name: IMPLEMENTATION BUILDER
-    needs: [api_architect, product_architect, security_architect]
-    runs-on: ubuntu-latest
-    timeout-minutes: 300
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.ATLAS_NODE_VERSION }}
-      - name: Mount handoffs and resume latest integration checkpoint
-        shell: bash
+        env:
+          FORGE_EMAIL: ${{ secrets.FORGE_EMAIL }}
+          FORGE_API_TOKEN: ${{ secrets.FORGE_API_TOKEN }}
+          ATLASSIAN_SITE: ${{ secrets.ATLASSIAN_SITE }}
+          FORGE_DEVELOPER_SPACE_ID: ${{ secrets.FORGE_DEVELOPER_SPACE_ID }}
         run: |
           set -euo pipefail
-          for lane in api product security; do
-            git fetch origin "factory/${GITHUB_RUN_ID}/$lane:refs/remotes/origin/factory/${GITHUB_RUN_ID}/$lane"
-            git worktree add --detach "/tmp/atlas_$lane" "origin/factory/${GITHUB_RUN_ID}/$lane"
-          done
-
-          git fetch origin main
-          if git ls-remote --exit-code --heads origin factory/continuation >/dev/null 2>&1; then
-            git fetch origin 'factory/continuation:refs/remotes/origin/factory/continuation'
-            git switch -C "factory/${GITHUB_RUN_ID}/build" origin/factory/continuation
-            if ! git rebase origin/main; then
-              echo '::warning::Continuation checkpoint could not rebase cleanly onto main; falling back to accepted main rather than deadlocking the factory.'
-              git rebase --abort || true
-              git switch -C "factory/${GITHUB_RUN_ID}/build" origin/main
-            else
-              echo 'ATLAS_CONTINUATION_CHECKPOINT=RESUMED'
-            fi
-          else
-            git switch -C "factory/${GITHUB_RUN_ID}/build" origin/main
-            echo 'ATLAS_CONTINUATION_CHECKPOINT=NONE'
+          forge_ready=false
+          register_ready=false
+          if [[ -n "$FORGE_EMAIL" && -n "$FORGE_API_TOKEN" && -n "$ATLASSIAN_SITE" ]]; then
+            forge_ready=true
           fi
-
-          mkdir -p .factory-inputs
-          cp /tmp/atlas_api/docs/API_FEASIBILITY.md .factory-inputs/API_FEASIBILITY.md
-          cp /tmp/atlas_product/docs/PRODUCT_V1.md .factory-inputs/PRODUCT_V1.md
-          cp /tmp/atlas_security/docs/SECURITY_TEST_PLAN.md .factory-inputs/SECURITY_TEST_PLAN.md
-      - name: Install OpenCode
-        run: bash .github/scripts/install-opencode-with-retry.sh
-      - name: Build real Forge V1
-        shell: bash
-        run: |
-          .github/scripts/run-opencode-with-retry.sh run \
-            --model "$ATLAS_MODEL" \
-            --agent implementation_builder \
-            "Build the actual Atlas V1 now. First read state/factory_direction.json and prioritize next_focus. Then read .factory-inputs/API_FEASIBILITY.md, .factory-inputs/PRODUCT_V1.md and .factory-inputs/SECURITY_TEST_PLAN.md. Resolve contradictions conservatively. Verified API feasibility controls platform facts; stricter security controls safety; product spec controls UX only where technically and safely feasible. Continue from existing product/checkpoint work; do not rebuild solved pieces or stop at a plan."
-      - name: Require actual product artifacts
-        shell: bash
-        run: |
-          if [[ ! -f manifest.yml || ! -f package.json ]]; then
-            echo '::error::ATLAS_BUILD_ARTIFACT_MISSING Builder returned without manifest.yml and package.json.'
-            exit 70
+          if [[ "$forge_ready" == true && -n "$FORGE_DEVELOPER_SPACE_ID" ]]; then
+            register_ready=true
           fi
-      - name: Run host diagnostics
-        continue-on-error: true
-        shell: bash
-        run: |
-          if [[ -f package-lock.json ]]; then npm ci; else npm install; fi
-          npm test --if-present
-          npm run typecheck --if-present
-          npm run lint --if-present
-          npm run audit:high --if-present
-          npm run build --if-present
-      - name: Run Forge parity diagnostic
-        continue-on-error: true
-        shell: bash
-        run: bash .github/scripts/forge-parity-check.sh
-      - name: Persist build snapshot
-        if: always()
-        shell: bash
-        run: |
-          git config user.name atlas-builder
-          git config user.email atlas-builder@autonomous.local
-          git add -A
-          git commit -m "Atlas V1 build ${GITHUB_RUN_ID}" || true
-          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/build"
+          echo "forge_ready=$forge_ready" >> "$GITHUB_OUTPUT"
+          echo "register_ready=$register_ready" >> "$GITHUB_OUTPUT"
 
-  functional_redteam:
-    name: FUNCTIONAL RED TEAM
-    needs: [builder]
-    if: needs.builder.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Checkout build snapshot
+      - name: Decide the only next mode
+        id: mode
         shell: bash
+        env:
+          FORGE_READY: ${{ steps.credentials.outputs.forge_ready }}
         run: |
-          git fetch origin "factory/${GITHUB_RUN_ID}/build:refs/remotes/origin/factory/${GITHUB_RUN_ID}/build"
-          git switch -C "factory/${GITHUB_RUN_ID}/functional-audit" "origin/factory/${GITHUB_RUN_ID}/build"
-          mkdir -p audit
-      - name: Install OpenCode
-        run: bash .github/scripts/install-opencode-with-retry.sh
-      - name: Attack correctness
-        shell: bash
-        run: |
-          .github/scripts/run-opencode-with-retry.sh run \
-            --model "$ATLAS_MODEL" \
-            --agent functional_redteam \
-            "Audit this exact builder snapshot. Attack fixture/live equivalence, false savings, partial scans, pricing math and all SAFE classifications. Also inspect the current state/factory_direction.json next_focus for unfinished release work. Your only durable output is audit/FUNCTIONAL.md. Do not repair the app."
-      - name: Persist functional audit
-        shell: bash
-        run: |
-          test -f audit/FUNCTIONAL.md || { echo '::error::Missing audit/FUNCTIONAL.md'; exit 1; }
-          git reset -- . >/dev/null 2>&1 || true
-          git add audit/FUNCTIONAL.md
-          git config user.name atlas-functional-redteam
-          git config user.email atlas-functional-redteam@autonomous.local
-          git commit -m "Functional audit ${GITHUB_RUN_ID}" || true
-          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/functional-audit"
+          set -euo pipefail
+          status=$(jq -r '.release_status' state/factory_direction.json)
+          next_focus=$(jq -r '.next_focus // empty' state/factory_direction.json)
+          echo "status=$status" >> "$GITHUB_OUTPUT"
 
-  security_redteam:
-    name: SECURITY RED TEAM
-    needs: [builder, security_architect]
-    if: needs.builder.result == 'success' && needs.security_architect.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Checkout build and internalize security handoff
-        shell: bash
-        run: |
-          git fetch origin "factory/${GITHUB_RUN_ID}/build:refs/remotes/origin/factory/${GITHUB_RUN_ID}/build"
-          git switch -C "factory/${GITHUB_RUN_ID}/security-audit" "origin/factory/${GITHUB_RUN_ID}/build"
-          git fetch origin "factory/${GITHUB_RUN_ID}/security:refs/remotes/origin/factory/${GITHUB_RUN_ID}/security"
-          git worktree add --detach /tmp/atlas_security_plan "origin/factory/${GITHUB_RUN_ID}/security"
-          mkdir -p .factory-inputs audit
-          cp /tmp/atlas_security_plan/docs/SECURITY_TEST_PLAN.md .factory-inputs/SECURITY_TEST_PLAN.md
-      - name: Install OpenCode
-        run: bash .github/scripts/install-opencode-with-retry.sh
-      - name: Attack security and Marketplace readiness
-        shell: bash
-        run: |
-          .github/scripts/run-opencode-with-retry.sh run \
-            --model "$ATLAS_MODEL" \
-            --agent security_redteam \
-            "Audit this exact builder snapshot. Read .factory-inputs/SECURITY_TEST_PLAN.md and state/factory_direction.json. Attack scope creep, tenant leakage, mock/live confusion, secret handling, dependency risk, release-readiness gaps and unsafe remediation. Durable output only audit/SECURITY.md. Do not repair the app."
-      - name: Persist security audit
-        shell: bash
-        run: |
-          test -f audit/SECURITY.md || { echo '::error::Missing audit/SECURITY.md'; exit 1; }
-          git reset -- . >/dev/null 2>&1 || true
-          git add audit/SECURITY.md
-          git config user.name atlas-security-redteam
-          git config user.email atlas-security-redteam@autonomous.local
-          git commit -m "Security audit ${GITHUB_RUN_ID}" || true
-          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/security-audit"
+          case "$status" in
+            MARKETPLACE_READY)
+              mode=stop
+              ;;
+            PARITY_READY_AWAITING_CREDENTIALS)
+              if [[ "$FORGE_READY" == true ]]; then mode=live; else mode=wait; fi
+              ;;
+            BUILDING|LIVE_DEV_VERIFIED|BLOCKED_HUMAN)
+              mode=build
+              ;;
+            *)
+              echo "::error::Unknown Atlas release_status: $status"
+              exit 64
+              ;;
+          esac
 
-  integrator:
-    name: RELEASE INTEGRATOR
-    needs: [functional_redteam, security_redteam]
-    if: needs.functional_redteam.result == 'success' && needs.security_redteam.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 300
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.ATLAS_NODE_VERSION }}
-      - name: Checkout build and internalize audits
-        shell: bash
-        run: |
-          git fetch origin "factory/${GITHUB_RUN_ID}/build:refs/remotes/origin/factory/${GITHUB_RUN_ID}/build"
-          git switch -C "factory/${GITHUB_RUN_ID}/candidate" "origin/factory/${GITHUB_RUN_ID}/build"
-          mkdir -p .factory-inputs/audits
-          for lane in functional-audit security-audit; do
-            git fetch origin "factory/${GITHUB_RUN_ID}/$lane:refs/remotes/origin/factory/${GITHUB_RUN_ID}/$lane"
-            git worktree add --detach "/tmp/atlas_$lane" "origin/factory/${GITHUB_RUN_ID}/$lane"
-          done
-          cp /tmp/atlas_functional-audit/audit/FUNCTIONAL.md .factory-inputs/audits/FUNCTIONAL.md
-          cp /tmp/atlas_security-audit/audit/SECURITY.md .factory-inputs/audits/SECURITY.md
-      - name: Install OpenCode
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "ATLAS_MODE=$mode status=$status next_focus=$next_focus"
+
+      - name: Stop cleanly when Marketplace-ready
+        if: steps.mode.outputs.mode == 'stop'
+        run: echo 'ATLAS_FACTORY=STOP_MARKETPLACE_READY'
+
+      - name: Wait cleanly for live credentials
+        if: steps.mode.outputs.mode == 'wait'
+        run: echo 'ATLAS_FACTORY=WAITING_FORGE_CREDENTIALS_NO_OX_CALL'
+
+      - name: Install OpenCode only when product work exists
+        if: steps.mode.outputs.mode == 'build'
         run: bash .github/scripts/install-opencode-with-retry.sh
-      - name: Repair and integrate
+
+      - name: Advance the product in one bounded autonomous pass
+        if: steps.mode.outputs.mode == 'build'
         shell: bash
         run: |
           .github/scripts/run-opencode-with-retry.sh run \
             --model "$ATLAS_MODEL" \
             --agent release_integrator \
-            "Repair the build using .factory-inputs/audits/FUNCTIONAL.md and .factory-inputs/audits/SECURITY.md. Read the current state/factory_direction.json and advance its next_focus. Produce one release candidate, docs/RELEASE_STATUS.md and state/factory_direction.json. MARKETPLACE_READY is the only status allowed to set continue=false; every unfinished or human-blocked state must remain continue=true with a concrete next_focus. Do not stop until the parity gates pass or an explicit honest blocker remains, and preserve useful progress even if one gate still fails."
-      - name: Validate continuation contract
-        shell: bash
-        run: |
-          test -f state/factory_direction.json || { echo '::error::Missing state/factory_direction.json'; exit 1; }
-          jq -e '.release_status and (.continue|type=="boolean") and .reason and .next_focus and .updated_at' state/factory_direction.json >/dev/null
-          jq -e '.release_status=="BUILDING" or .release_status=="PARITY_READY_AWAITING_CREDENTIALS" or .release_status=="LIVE_DEV_VERIFIED" or .release_status=="MARKETPLACE_READY" or .release_status=="BLOCKED_HUMAN"' state/factory_direction.json >/dev/null
-          status=$(jq -r '.release_status' state/factory_direction.json)
-          cont=$(jq -r '.continue' state/factory_direction.json)
-          if [[ "$status" == 'MARKETPLACE_READY' ]]; then
-            [[ "$cont" == false ]] || { echo '::error::MARKETPLACE_READY must set continue=false'; exit 1; }
-          else
-            [[ "$cont" == true ]] || { echo "::error::Unfinished status $status must keep continue=true"; exit 1; }
-            test -n "$(jq -r '.next_focus // empty' state/factory_direction.json)" || { echo '::error::Unfinished state requires next_focus'; exit 1; }
-          fi
-      - name: Remove ephemeral factory inputs
-        run: rm -rf .factory-inputs
-      - name: Persist resumable integration checkpoint
-        if: success()
-        shell: bash
-        run: |
-          rm -rf .factory-inputs
-          git config user.name atlas-release-integrator
-          git config user.email atlas-release-integrator@autonomous.local
-          git add -A
-          git commit -m "Integration checkpoint ${GITHUB_RUN_ID}" || true
-          git push --force origin 'HEAD:factory/continuation'
-      - name: Hard host gate
-        shell: bash
-        run: |
-          test -f manifest.yml || { echo '::error::Missing Forge manifest'; exit 1; }
-          test -f package.json || { echo '::error::Missing package.json'; exit 1; }
-          if [[ -f package-lock.json ]]; then npm ci; else npm install; fi
-          npm test --if-present
-          npm run typecheck --if-present
-          npm run lint --if-present
-          npm run audit:high --if-present
-          npm run build --if-present
-      - name: Hard Forge parity gate
-        shell: bash
-        run: bash .github/scripts/forge-parity-check.sh
-      - name: Persist vetted release candidate
-        if: success()
-        shell: bash
-        run: |
-          git config user.name atlas-release-integrator
-          git config user.email atlas-release-integrator@autonomous.local
-          git add -A
-          git commit -m "Release candidate ${GITHUB_RUN_ID}" || true
-          git push --force origin "HEAD:factory/${GITHUB_RUN_ID}/candidate"
+            "Advance the existing Atlas product, not the automation. Read ATLAS_MASTER_PROMPT.md, PRODUCT_CONTRACT.md, AGENTS.md, your canonical card, docs/RELEASE_STATUS.md and state/factory_direction.json. Implement the concrete next_focus or the highest-value remaining release blocker. Preserve the current product, its read-only V1 scope, its evidence/risk semantics and all existing tests. Verify current official Atlassian/Forge documentation when a platform fact matters. Do not create new agents, workflows, branches, handoff layers or speculative features. Do not stop at analysis: edit the product, add or repair tests where needed, run the real gates, update docs/RELEASE_STATUS.md and state/factory_direction.json honestly."
 
-  forge_release_gate:
-    name: FORGE LIVE GATE + MAIN
-    needs: [integrator]
-    if: needs.integrator.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    env:
-      FORGE_EMAIL: ${{ secrets.FORGE_EMAIL }}
-      FORGE_API_TOKEN: ${{ secrets.FORGE_API_TOKEN }}
-      FORGE_DEVELOPER_SPACE_ID: ${{ secrets.FORGE_DEVELOPER_SPACE_ID }}
-      ATLASSIAN_SITE: ${{ secrets.ATLASSIAN_SITE }}
-      ATLASSIAN_ORG_ID: ${{ secrets.ATLASSIAN_ORG_ID }}
-      ATLASSIAN_ORG_API_KEY: ${{ secrets.ATLASSIAN_ORG_API_KEY }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.ATLAS_NODE_VERSION }}
-      - name: Checkout release candidate
-        shell: bash
-        run: |
-          git fetch origin "factory/${GITHUB_RUN_ID}/candidate:refs/remotes/origin/factory/${GITHUB_RUN_ID}/candidate"
-          git switch -C release "origin/factory/${GITHUB_RUN_ID}/candidate"
-      - name: Re-run Forge parity gate
-        run: bash .github/scripts/forge-parity-check.sh
-      - name: Forge registration, deploy and install when configured
+      - name: Install product dependencies for hard gates
+        if: steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'live'
+        run: npm ci
+
+      - name: Hard deterministic product gates
+        if: steps.mode.outputs.mode == 'build' || steps.mode.outputs.mode == 'live'
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "$FORGE_EMAIL" || -z "$FORGE_API_TOKEN" || -z "$ATLASSIAN_SITE" ]]; then
-            echo 'FORGE_LIVE_GATE=SKIPPED_MISSING_FORGE_CREDENTIALS_OR_SITE'
-            tmp=$(mktemp)
-            now=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-            jq --arg now "$now" '.release_status="PARITY_READY_AWAITING_CREDENTIALS" | .continue=true | .reason="Forge-parity candidate accepted; authenticated Forge validation and a real Atlassian development site are still required." | .next_focus="Continue offline Marketplace/release hardening, re-check Forge credentials each cycle, and run register/lint/deploy/install immediately when configured." | .updated_at=$now' state/factory_direction.json > "$tmp"
-            mv "$tmp" state/factory_direction.json
+          npm test
+          npm run typecheck
+          npm run lint
+          npm run audit:high
+          npm run build
+          bash .github/scripts/forge-parity-check.sh
+
+      - name: Commit only gate-clean autonomous product changes
+        if: steps.mode.outputs.mode == 'build'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name atlas-product-factory
+          git config user.email atlas-product-factory@autonomous.local
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'ATLAS_PRODUCT_COMMIT=NO_CHANGES'
             exit 0
           fi
+          git commit -m "Advance Atlas product ${GITHUB_RUN_ID}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo 'ATLAS_PRODUCT_COMMIT=PASS'
 
+      - name: Authenticated Forge register, lint, deploy and install
+        if: steps.mode.outputs.mode == 'live'
+        shell: bash
+        env:
+          FORGE_EMAIL: ${{ secrets.FORGE_EMAIL }}
+          FORGE_API_TOKEN: ${{ secrets.FORGE_API_TOKEN }}
+          FORGE_DEVELOPER_SPACE_ID: ${{ secrets.FORGE_DEVELOPER_SPACE_ID }}
+          ATLASSIAN_SITE: ${{ secrets.ATLASSIAN_SITE }}
+        run: |
+          set -euo pipefail
           npm install -g @forge/cli@latest
           forge settings set usage-analytics false || true
           forge whoami
 
           if ! grep -Eq '^[[:space:]]+id:[[:space:]]*ari:cloud:ecosystem::app/' manifest.yml || grep -Eq 'ari:cloud:ecosystem::app/0{8}-0{4}-0{4}-0{4}-0{12}|ATLAS_PLACEHOLDER' manifest.yml; then
-            echo 'ATLAS_FORGE_REGISTRATION_REQUIRED'
             if [[ -z "$FORGE_DEVELOPER_SPACE_ID" ]]; then
-              echo '::error::Forge app is unregistered and FORGE_DEVELOPER_SPACE_ID is missing.'
-              exit 1
+              echo '::error::FORGE_DEVELOPER_SPACE_ID is required to register the unregistered app.'
+              exit 65
             fi
             forge register --developer-space-id "$FORGE_DEVELOPER_SPACE_ID" --accept-terms 'Cut My Atlassian Bill'
+
+            git config user.name atlas-forge-release
+            git config user.email atlas-forge-release@autonomous.local
+            git add manifest.yml
+            git commit -m "Register Atlas Forge app"
+            git pull --rebase origin main
+            git push origin HEAD:main
+            echo 'ATLAS_FORGE_REGISTRATION=PERSISTED'
           fi
 
           forge lint
           forge deploy -e development --non-interactive
           forge install --site "$ATLASSIAN_SITE" --product Jira -e development --upgrade all --confirm-scopes --non-interactive
 
-          tmp=$(mktemp)
           now=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-          jq --arg now "$now" '.release_status="LIVE_DEV_VERIFIED" | .continue=true | .reason="Authenticated Forge lint, development deploy and Jira install completed successfully; live scan validation and Marketplace packaging remain." | .next_focus="Run the real-environment scan checklist, spot-check savings and evidence, complete Marketplace/security/privacy packaging, then mark MARKETPLACE_READY only if every release gate is green." | .updated_at=$now' state/factory_direction.json > "$tmp"
+          tmp=$(mktemp)
+          jq --arg now "$now" '
+            .release_status="LIVE_DEV_VERIFIED"
+            | .continue=true
+            | .reason="Authenticated Forge lint, development deploy and Jira install completed successfully. Real-environment verification and Marketplace packaging remain."
+            | .next_focus="Complete the real-environment verification checklist and Marketplace/security/privacy packaging without widening V1 scope."
+            | .updated_at=$now
+          ' state/factory_direction.json > "$tmp"
           mv "$tmp" state/factory_direction.json
-          echo 'FORGE_LIVE_GATE=PASS'
-      - name: Optional live Organizations API smoke test
-        shell: bash
-        run: |
-          if [[ -z "$ATLASSIAN_ORG_ID" || -z "$ATLASSIAN_ORG_API_KEY" ]]; then
-            echo 'ORG_API_SMOKE=SKIPPED_MISSING_ORG_CREDENTIALS'
-            exit 0
-          fi
-          code=$(curl -sS -o /tmp/org-users.json -w '%{http_code}' \
-            -H "Authorization: Bearer $ATLASSIAN_ORG_API_KEY" \
-            -H 'Accept: application/json' \
-            "https://api.atlassian.com/admin/v1/orgs/$ATLASSIAN_ORG_ID/users")
-          if [[ "$code" != '200' ]]; then
-            echo "::warning::Optional Organizations API smoke failed HTTP $code; org enrichment remains disabled and this does not invalidate the core Forge release gate."
-            exit 0
-          fi
-          node -e "const x=require('/tmp/org-users.json'); if(!Array.isArray(x.data)) { console.error('Unexpected optional org users response shape'); process.exit(0); } console.log('ORG_API_USERS='+x.data.length)"
-      - name: Commit release state and registration changes
-        shell: bash
-        run: |
+
           git config user.name atlas-forge-release
           git config user.email atlas-forge-release@autonomous.local
-          git add manifest.yml docs/RELEASE_STATUS.md state/factory_direction.json 2>/dev/null || true
-          git commit -m "Forge gate ${GITHUB_RUN_ID}" || true
-      - name: Promote candidate to main
-        shell: bash
-        run: |
-          git fetch origin main
-          git rebase origin/main
+          git add state/factory_direction.json
+          git commit -m "Record Atlas live Forge verification"
+          git pull --rebase origin main
           git push origin HEAD:main
+          echo 'ATLAS_FORGE_LIVE_GATE=PASS'
