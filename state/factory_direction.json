@@ -1,7 +1,7 @@
 {
-  "release_status": "PARITY_READY_AWAITING_CREDENTIALS",
+  "release_status": "BUILDING",
   "continue": true,
-  "reason": "Deterministic product, security, Marketplace and Forge-parity gates are green. The remaining release boundary is authenticated Forge registration/lint/deploy/install and real Jira verification; without the required repository secrets and target site there is no evidence-based offline blocker that justifies repeated Ox work.",
-  "next_focus": "When Forge credentials and ATLASSIAN_SITE are available, run the authenticated Forge register/lint/deploy/install gate, then complete the real-environment verification checklist and Marketplace/security/privacy packaging. Until then, keep deterministic CI green and make no Ox call.",
-  "updated_at": "2026-08-27T11:42:00Z"
+  "reason": "The autonomous factory has been rebuilt from the foundation as one clean parallel DAG with the seven original specialist roles, independent red-team lanes, deterministic promotion gates, integrated five-minute OpenCode watchdog/retries, a final always-run heartbeat, and clean-slate execution hygiene. Before returning to a credential-only wait state, Atlas must complete one full audited convergence cycle under this rebuilt architecture and prove that no automatable product blocker remains.",
+  "next_focus": "Run the full parallel factory: refresh product/API/security architecture in parallel, build the real candidate, execute independent functional and security red teams in parallel, integrate their findings, pass all deterministic gates, and only then decide whether the remaining boundary is truly authenticated Forge/live evidence or additional product work.",
+  "updated_at": "2026-08-27T13:02:00Z"
 }
